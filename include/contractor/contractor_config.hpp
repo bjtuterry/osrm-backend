@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2016, Project OSRM contributors
+Copyright (c) 2017, Project OSRM contributors
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without modification,
@@ -43,12 +43,9 @@ namespace contractor
 struct ContractorConfig final : storage::IOConfig
 {
     ContractorConfig()
-        : IOConfig(
-              {
-                  ".osrm.ebg",
-              },
-              {},
-              {".osrm.level", ".osrm.core", ".osrm.hsgr", ".osrm.enw"}),
+        : IOConfig({".osrm.ebg", ".osrm.ebg_nodes", ".osrm.properties"},
+                   {},
+                   {".osrm.hsgr", ".osrm.enw"}),
           requested_num_threads(0)
     {
     }
@@ -64,10 +61,12 @@ struct ContractorConfig final : storage::IOConfig
 
     updater::UpdaterConfig updater_config;
 
+    // DEPRECATED to be removed in v6.0
     bool use_cached_priority;
 
     unsigned requested_num_threads;
 
+    // DEPRECATED to be removed in v6.0
     // A percentage of vertices that will be contracted for the hierarchy.
     // Offers a trade-off between preprocessing and query time.
     // The remaining vertices form the core of the hierarchy

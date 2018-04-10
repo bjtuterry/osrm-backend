@@ -6,6 +6,7 @@ Feature: Basic Distance Matrix
 
     Background:
         Given the profile "testbot"
+        And the partition extra arguments "--small-component-size 1 --max-cell-sizes 2,4,8,16"
 
     Scenario: Testbot - Travel time matrix of minimal network
         Given the node map
@@ -40,6 +41,17 @@ Feature: Basic Distance Matrix
             | b | 10 | 0  | 20 | 50 |
             | c | 30 | 20 | 0  | 30 |
             | d | 60 | 50 | 30 | 0  |
+
+        When I request a travel time matrix I should get
+            |   | a  | b  | c  | d  |
+            | a | 0  | 10 | 30 | 60 |
+
+        When I request a travel time matrix I should get
+            |   |  a |
+            | a |  0 |
+            | b | 10 |
+            | c | 30 |
+            | d | 60 |
 
     Scenario: Testbot - Travel time matrix with fuzzy match
         Given the node map
@@ -113,7 +125,7 @@ Feature: Basic Distance Matrix
             | d | 20 | 30  | 0  | 30 |
             | e | 30 | 40  | 10 | 0  |
 
-    Scenario: Testbot - Travel time matrix and with only one source
+    Scenario: Testbot - Rectangular travel time matrix
         Given the node map
             """
             a b c
@@ -131,6 +143,46 @@ Feature: Basic Distance Matrix
         When I request a travel time matrix I should get
             |   | a | b  | e  | f  |
             | a | 0 | 10 | 20 | 30 |
+
+        When I request a travel time matrix I should get
+            |   |  a |
+            | a |  0 |
+            | b | 10 |
+            | e | 20 |
+            | f | 30 |
+
+        When I request a travel time matrix I should get
+            |   |  a |  b |  e |  f |
+            | a |  0 | 10 | 20 | 30 |
+            | b | 10 |  0 | 10 | 20 |
+
+        When I request a travel time matrix I should get
+            |   |  a |  b |
+            | a |  0 | 10 |
+            | b | 10 |  0 |
+            | e | 20 | 10 |
+            | f | 30 | 20 |
+
+        When I request a travel time matrix I should get
+            |   |  a |  b |  e |  f |
+            | a |  0 | 10 | 20 | 30 |
+            | b | 10 |  0 | 10 | 20 |
+            | e | 20 | 10 |  0 | 10 |
+
+        When I request a travel time matrix I should get
+            |   |  a |  b |  e |
+            | a |  0 | 10 | 20 |
+            | b | 10 |  0 | 10 |
+            | e | 20 | 10 |  0 |
+            | f | 30 | 20 | 10 |
+
+        When I request a travel time matrix I should get
+            |   |  a |  b |  e |  f |
+            | a |  0 | 10 | 20 | 30 |
+            | b | 10 |  0 | 10 | 20 |
+            | e | 20 | 10 |  0 | 10 |
+            | f | 30 | 20 | 10 |  0 |
+
 
      Scenario: Testbot - Travel time 3x2 matrix
         Given the node map
@@ -308,3 +360,52 @@ Feature: Basic Distance Matrix
           | 6 |   7 |   6 |  10 |   9 |    1 |   0 | 3.9 | 2.9 |
           | 7 | 3.1 | 2.1 | 6.1 | 5.1 |  9.1 | 8.1 |   0 |  11 |
           | 8 | 4.1 | 3.1 | 7.1 | 6.1 | 10.1 | 9.1 |   1 | 0   |
+
+
+    Scenario: Testbot - Travel time matrix with ties
+        Given the profile file
+        """
+        local functions = require('testbot')
+        functions.process_segment = function(profile, segment)
+          segment.weight = 1
+          segment.duration = 1
+        end
+        functions.process_turn = function(profile, turn)
+          if turn.angle >= 0 then
+            turn.duration = 16
+          else
+            turn.duration = 4
+          end
+          turn.weight = 0
+        end
+        return functions
+        """
+        And the node map
+            """
+            a     b
+
+            c     d
+            """
+
+        And the ways
+          | nodes |
+          | ab    |
+          | ac    |
+          | bd    |
+          | dc    |
+
+
+        When I route I should get
+          | from | to | route | distance | time | weight |
+          | a    | c  | ac,ac | 200m     | 5s   |      5 |
+
+        When I request a travel time matrix I should get
+          |   | a | b | c |  d |
+          | a | 0 | 1 | 5 | 10 |
+
+        When I request a travel time matrix I should get
+          |   |  a |
+          | a |  0 |
+          | b |  1 |
+          | c | 15 |
+          | d | 10 |

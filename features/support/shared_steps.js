@@ -35,7 +35,8 @@ module.exports = function () {
                     if (err) return cb(err);
                     if (body && body.length) {
                         let destinations, exits, pronunciations, instructions, refs, bearings, turns, modes, times, classes,
-                            distances, summary, intersections, lanes, locations, annotation, weight_name, weights, approaches;
+                            distances, summary, intersections, lanes, locations, annotation, weight_name, weights, approaches,
+                            driving_sides;
 
                         let json = JSON.parse(body);
 
@@ -53,6 +54,7 @@ module.exports = function () {
                             turns = this.turnList(json.routes[0]);
                             intersections = this.intersectionList(json.routes[0]);
                             modes = this.modeList(json.routes[0]);
+                            driving_sides = this.drivingSideList(json.routes[0]);
                             classes = this.classesList(json.routes[0]);
                             times = this.timeList(json.routes[0]);
                             distances = this.distanceList(json.routes[0]);
@@ -156,7 +158,8 @@ module.exports = function () {
                         // if header matches 'a:*', parse out the values for *
                         // and return in that header
                         headers.forEach((k) => {
-                            let whitelist = ['duration', 'distance', 'datasources', 'nodes', 'weight', 'speed'];
+                            let whitelist = ['duration', 'distance', 'datasources', 'nodes', 'weight', 'speed' ];
+                            let metadata_whitelist = [ 'datasource_names' ];
                             if (k.match(/^a:/)) {
                                 let a_type = k.slice(2);
                                 if (whitelist.indexOf(a_type) == -1)
@@ -164,6 +167,13 @@ module.exports = function () {
                                 if (annotation && !annotation[a_type])
                                     return cb(new Error('Annotation not found in response', a_type));
                                 got[k] = annotation && annotation[a_type] || '';
+                            } else if (k.match(/^am:/)) {
+                                let a_type = k.slice(3);
+                                if (metadata_whitelist.indexOf(a_type) == -1)
+                                    return cb(new Error('Unrecognized annotation field', a_type));
+                                if (annotation && (!annotation.metadata || !annotation.metadata[a_type]))
+                                    return cb(new Error('Annotation not found in response', a_type));
+                                got[k] = (annotation && annotation.metadata && annotation.metadata[a_type]) || '';
                             }
                         });
 
@@ -185,6 +195,10 @@ module.exports = function () {
                         putValue('weights', weights);
                         putValue('weight', weight);
                         putValue('approach', approaches);
+
+                        if (driving_sides) {
+                            putValue('driving_side', driving_sides);
+                        }
 
                         for (var key in row) {
                             if (this.FuzzyMatch.match(got[key], row[key])) {

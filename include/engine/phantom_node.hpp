@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2016, Project OSRM contributors
+Copyright (c) 2017, Project OSRM contributors
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without modification,
@@ -25,19 +25,16 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 */
 
-#ifndef PHANTOM_NODES_H
-#define PHANTOM_NODES_H
+#ifndef OSRM_ENGINE_PHANTOM_NODES_H
+#define OSRM_ENGINE_PHANTOM_NODES_H
 
 #include "extractor/travel_mode.hpp"
+
+#include "util/bearing.hpp"
+#include "util/coordinate.hpp"
 #include "util/typedefs.hpp"
 
-#include "util/coordinate.hpp"
-
 #include <boost/assert.hpp>
-
-#include <iostream>
-#include <utility>
-#include <vector>
 
 namespace osrm
 {
@@ -53,7 +50,7 @@ struct PhantomNode
           forward_duration(MAXIMAL_EDGE_DURATION), reverse_duration(MAXIMAL_EDGE_DURATION),
           forward_duration_offset(0), reverse_duration_offset(0), fwd_segment_position(0),
           is_valid_forward_source{false}, is_valid_forward_target{false},
-          is_valid_reverse_source{false}, is_valid_reverse_target{false}
+          is_valid_reverse_source{false}, is_valid_reverse_target{false}, bearing(0)
     {
     }
 
@@ -117,6 +114,12 @@ struct PhantomNode
     {
         return reverse_segment_id.enabled && is_valid_reverse_target;
     }
+    short GetBearing(const bool traversed_in_reverse) const
+    {
+        if (traversed_in_reverse)
+            return std::round(util::bearing::reverse(bearing));
+        return std::round(bearing);
+    }
 
     bool operator==(const PhantomNode &other) const { return location == other.location; }
 
@@ -136,7 +139,8 @@ struct PhantomNode
                          bool is_valid_reverse_source,
                          bool is_valid_reverse_target,
                          const util::Coordinate location,
-                         const util::Coordinate input_location)
+                         const util::Coordinate input_location,
+                         const unsigned short bearing)
         : forward_segment_id{other.forward_segment_id},
           reverse_segment_id{other.reverse_segment_id}, forward_weight{forward_weight},
           reverse_weight{reverse_weight}, forward_weight_offset{forward_weight_offset},
@@ -148,7 +152,7 @@ struct PhantomNode
           is_valid_forward_source{is_valid_forward_source},
           is_valid_forward_target{is_valid_forward_target},
           is_valid_reverse_source{is_valid_reverse_source},
-          is_valid_reverse_target{is_valid_reverse_target}
+          is_valid_reverse_target{is_valid_reverse_target}, bearing{bearing}
     {
     }
 
@@ -173,7 +177,7 @@ struct PhantomNode
     unsigned short is_valid_forward_target : 1;
     unsigned short is_valid_reverse_source : 1;
     unsigned short is_valid_reverse_target : 1;
-    unsigned short : 12; // Unused padding out to 16 bits (2 bytes)
+    unsigned short bearing : 12;
 };
 
 static_assert(sizeof(PhantomNode) == 64, "PhantomNode has more padding then expected");
@@ -191,31 +195,6 @@ struct PhantomNodes
     PhantomNode source_phantom;
     PhantomNode target_phantom;
 };
-
-inline std::ostream &operator<<(std::ostream &out, const PhantomNodes &pn)
-{
-    out << "source_coord: " << pn.source_phantom.location << "\n";
-    out << "target_coord: " << pn.target_phantom.location << std::endl;
-    return out;
-}
-
-inline std::ostream &operator<<(std::ostream &out, const PhantomNode &pn)
-{
-    out << "node1: " << pn.forward_segment_id.id << ", "
-        << "node2: " << pn.reverse_segment_id.id << ", "
-        << "fwd-w: " << pn.forward_weight << ", "
-        << "rev-w: " << pn.reverse_weight << ", "
-        << "fwd-o: " << pn.forward_weight_offset << ", "
-        << "rev-o: " << pn.reverse_weight_offset << ", "
-        << "fwd-d: " << pn.forward_duration << ", "
-        << "rev-d: " << pn.reverse_duration << ", "
-        << "fwd-do: " << pn.forward_duration_offset << ", "
-        << "rev-do: " << pn.reverse_duration_offset << ", "
-        << "comp: " << pn.component.is_tiny << " / " << pn.component.id << ", "
-        << "pos: " << pn.fwd_segment_position << ", "
-        << "loc: " << pn.location;
-    return out;
-}
 }
 }
 

@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2016, Project OSRM contributors
+Copyright (c) 2017, Project OSRM contributors
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without modification,
@@ -44,22 +44,19 @@ namespace updater
 struct UpdaterConfig final : storage::IOConfig
 {
     UpdaterConfig()
-        : IOConfig(
-              {
-                  ".osrm.ebg",
-                  ".osrm.turn_weight_penalties",
-                  ".osrm.turn_duration_penalties",
-                  ".osrm.turn_penalties_index",
-                  ".osrm.nbg_nodes",
-                  ".osrm.ebg_nodes",
-                  ".osrm.edges",
-                  ".osrm.geometry",
-                  ".osrm.fileIndex",
-                  ".osrm.properties",
-                  ".osrm.restrictions",
-              },
-              {},
-              {".osrm.datasource_names"})
+        : IOConfig({".osrm.ebg",
+                    ".osrm.turn_weight_penalties",
+                    ".osrm.turn_duration_penalties",
+                    ".osrm.turn_penalties_index",
+                    ".osrm.nbg_nodes",
+                    ".osrm.ebg_nodes",
+                    ".osrm.geometry",
+                    ".osrm.fileIndex",
+                    ".osrm.properties",
+                    ".osrm.restrictions"},
+                   {},
+                   {".osrm.datasource_names"}),
+          valid_now(0)
     {
     }
 

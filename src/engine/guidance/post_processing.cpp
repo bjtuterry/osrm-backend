@@ -1,12 +1,13 @@
 #include "engine/guidance/post_processing.hpp"
-#include "extractor/guidance/constants.hpp"
-#include "extractor/guidance/turn_instruction.hpp"
+#include "guidance/constants.hpp"
+#include "guidance/turn_instruction.hpp"
 
 #include "engine/guidance/assemble_steps.hpp"
 #include "engine/guidance/lane_processing.hpp"
 
 #include "engine/guidance/collapsing_utility.hpp"
 #include "util/bearing.hpp"
+#include "util/group_by.hpp"
 #include "util/guidance/name_announcements.hpp"
 #include "util/guidance/turn_lanes.hpp"
 
@@ -14,17 +15,13 @@
 #include <boost/numeric/conversion/cast.hpp>
 #include <boost/range/iterator_range.hpp>
 
+#include "engine/guidance/collapsing_utility.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <limits>
 #include <utility>
-
-using osrm::util::angularDeviation;
-using osrm::extractor::guidance::getTurnDirection;
-using osrm::extractor::guidance::hasRampType;
-using osrm::extractor::guidance::mirrorDirectionModifier;
-using osrm::extractor::guidance::bearingToDirectionModifier;
 
 namespace osrm
 {
@@ -32,211 +29,143 @@ namespace engine
 {
 namespace guidance
 {
+using namespace osrm::guidance;
+
+using RouteStepIterator = std::vector<osrm::engine::guidance::RouteStep>::iterator;
 
 namespace
 {
 
-void fixFinalRoundabout(std::vector<RouteStep> &steps)
+// Ensure that after we are done with the roundabout, only the roundabout instructions themselves
+// remain
+void compressRange(const RouteStepIterator begin, const RouteStepIterator end)
 {
-    for (std::size_t propagation_index = steps.size() - 1; propagation_index > 0;
-         --propagation_index)
-    {
-        auto &propagation_step = steps[propagation_index];
-        propagation_step.maneuver.exit = 0;
-        if (entersRoundabout(propagation_step.maneuver.instruction))
-        {
-            // remember the current name as rotary name in tha case we end in a rotary
-            if (propagation_step.maneuver.instruction.type == TurnType::EnterRotary ||
-                propagation_step.maneuver.instruction.type == TurnType::EnterRotaryAtExit)
-            {
-                propagation_step.rotary_name = propagation_step.name;
-                propagation_step.rotary_pronunciation = propagation_step.pronunciation;
-            }
-            else if (propagation_step.maneuver.instruction.type ==
-                         TurnType::EnterRoundaboutIntersection ||
-                     propagation_step.maneuver.instruction.type ==
-                         TurnType::EnterRoundaboutIntersectionAtExit)
-            {
-                propagation_step.maneuver.instruction.type = TurnType::EnterRoundabout;
-            }
+    if (begin == end)
+        return;
 
-            return;
-        }
-        // accumulate turn data into the enter instructions
-        else if (propagation_step.maneuver.instruction.type == TurnType::StayOnRoundabout)
+    for (auto itr = begin + 1; itr != end; ++itr)
+    {
+        // ensure not to invalidate the final arrive
+        if (!hasWaypointType(*itr))
         {
-            // TODO this operates on the data that is in the instructions.
-            // We are missing out on the final segment after the last stay-on-roundabout
-            // instruction though. it is not contained somewhere until now
-            steps[propagation_index - 1].ElongateBy(propagation_step);
-            steps[propagation_index - 1].maneuver.exit = propagation_step.maneuver.exit;
-            propagation_step.Invalidate();
+            begin->ElongateBy(*itr);
+            itr->Invalidate();
         }
     }
 }
 
-bool setUpRoundabout(RouteStep &step)
+// this function handles a single roundabout between enter (which might be missing) to exit (which
+// might be missing as well)
+void processRoundaboutExits(const RouteStepIterator begin, const RouteStepIterator end)
 {
-    // basic entry into a roundabout
-    // Special case handling, if an entry is directly tied to an exit
-    const auto instruction = step.maneuver.instruction;
-    if (instruction.type == TurnType::EnterRotaryAtExit ||
-        instruction.type == TurnType::EnterRoundaboutAtExit ||
-        instruction.type == TurnType::EnterRoundaboutIntersectionAtExit)
+    auto const last = end - 1;
+    // If we do not exit the roundabout, there is no exit to report. All good here
+    if (!leavesRoundabout(last->maneuver.instruction))
     {
-        // Here we consider an actual entry, not an exit. We simply have to count the additional
-        // exit
-        step.maneuver.exit = 1;
-        // prevent futher special case handling of these two.
-        if (instruction.type == TurnType::EnterRotaryAtExit)
-            step.maneuver.instruction.type = TurnType::EnterRotary;
-        else if (instruction.type == TurnType::EnterRoundaboutAtExit)
-            step.maneuver.instruction.type = TurnType::EnterRoundabout;
-        else
-            step.maneuver.instruction.type = TurnType::EnterRoundaboutIntersection;
+        // first we do some clean-up
+        if (begin->maneuver.instruction.type == TurnType::EnterRotary ||
+            begin->maneuver.instruction.type == TurnType::EnterRotaryAtExit)
+        {
+            begin->rotary_name = begin->name;
+            begin->rotary_pronunciation = begin->pronunciation;
+        }
+        // roundabout turns don't make sense without an exit, update the type
+        else if (entersRoundabout(begin->maneuver.instruction) &&
+                 (begin->maneuver.instruction.type == TurnType::EnterRoundaboutIntersection ||
+                  begin->maneuver.instruction.type == TurnType::EnterRoundaboutIntersectionAtExit))
+        {
+            begin->maneuver.instruction.type = TurnType::EnterRoundabout;
+        }
+
+        // We are doing a roundtrip on the roundabout, Nothing to do here but to remove the
+        // instructions
+        compressRange(begin, end);
+        return;
     }
 
-    if (leavesRoundabout(instruction))
-    {
-        // This set-up, even though it looks the same, is actually looking at entering AND exiting
-        step.maneuver.exit = 1; // count the otherwise missing exit
+    const auto passes_exit_or_leaves_roundabout = [](auto const &step) {
+        return staysOnRoundabout(step.maneuver.instruction) ||
+               leavesRoundabout(step.maneuver.instruction);
+    };
 
-        // prevent futher special case handling of these two.
-        if (instruction.type == TurnType::EnterAndExitRotary)
-            step.maneuver.instruction.type = TurnType::EnterRotary;
-        else if (instruction.type == TurnType::EnterAndExitRoundabout)
-            step.maneuver.instruction.type = TurnType::EnterRoundabout;
-        else
-            step.maneuver.instruction.type = TurnType::EnterRoundaboutIntersection;
-        return false;
+    // exit count
+    const auto exit = std::count_if(begin, end, passes_exit_or_leaves_roundabout);
+
+    // removes all intermediate instructions, assigns names and exit numbers
+    BOOST_ASSERT(leavesRoundabout(last->maneuver.instruction));
+    BOOST_ASSERT(std::distance(begin, end) >= 1);
+    last->maneuver.exit = exit;
+
+    // when we actually have an enter instruction, we can store all the information on it that we
+    // need, otherwise we only provide the exit instruciton. In case of re-routing on the
+    // roundabout, this might result in strange behaviour, but this way we are more resiliant and we
+    // do provide exit after all
+    if (entersRoundabout(begin->maneuver.instruction))
+    {
+        begin->maneuver.exit = exit;
+        // special handling for rotaries: remember the name (legacy feature, due to
+        // adapt-step-signage)
+        if (begin->maneuver.instruction.type == TurnType::EnterRotary ||
+            begin->maneuver.instruction.type == TurnType::EnterRotaryAtExit)
+        {
+            begin->rotary_name = begin->name;
+            begin->rotary_pronunciation = begin->pronunciation;
+        }
+        // compute the total direction modifier for roundabout turns
+        else if (begin->maneuver.instruction.type == TurnType::EnterRoundaboutIntersection ||
+                 begin->maneuver.instruction.type == TurnType::EnterRoundaboutIntersectionAtExit)
+        {
+            const auto entry_intersection = begin->intersections.front();
+
+            const auto exit_intersection = last->intersections.front();
+            const auto exit_bearing = exit_intersection.bearings[exit_intersection.out];
+
+            BOOST_ASSERT(!begin->intersections.empty());
+            const double angle = util::bearing::angleBetween(
+                util::bearing::reverse(entry_intersection.bearings[entry_intersection.in]),
+                exit_bearing);
+
+            begin->maneuver.instruction.direction_modifier = getTurnDirection(angle);
+        }
+        begin->AdaptStepSignage(*last);
+    }
+
+    // in case of a roundabout turn, we do not emit an exit as long as the mode remains the same
+    if ((begin->maneuver.instruction.type == TurnType::EnterRoundaboutIntersection ||
+         begin->maneuver.instruction.type == TurnType::EnterRoundaboutIntersectionAtExit) &&
+        begin->mode == last->mode)
+    {
+        compressRange(begin, end);
     }
     else
     {
-        return true;
+        // do not remove last (the exit instruction)
+        compressRange(begin, last);
     }
 }
 
-void closeOffRoundabout(const bool on_roundabout,
-                        std::vector<RouteStep> &steps,
-                        std::size_t step_index)
+// roundabout groups are a sequence of roundabout instructions. This can contain enter/exit
+// instructions in between
+void processRoundaboutGroups(const std::pair<RouteStepIterator, RouteStepIterator> &range)
 {
-    auto &step = steps[step_index];
-    step.maneuver.exit += 1;
-    if (!on_roundabout)
+    const auto leaves_roundabout = [](auto const &step) {
+        return leavesRoundabout(step.maneuver.instruction);
+    };
+
+    auto itr = range.first;
+    while (itr != range.second)
     {
-        BOOST_ASSERT(steps.size() >= 2);
-
-        // We reached a special case that requires the addition of a special route step in the
-        // beginning. We started in a roundabout, so to announce the exit, we move use the exit
-        // instruction and move it right to the beginning to make sure to immediately announce the
-        // exit.
-        BOOST_ASSERT(leavesRoundabout(steps[1].maneuver.instruction) ||
-                     steps[1].maneuver.instruction.type == TurnType::StayOnRoundabout ||
-                     steps[1].maneuver.instruction.type == TurnType::Suppressed ||
-                     steps[1].maneuver.instruction.type == TurnType::NoTurn);
-        steps[0].geometry_end = 1;
-        steps[1].geometry_begin = 0;
-        steps[1].AddInFront(steps[0]);
-        steps[1].intersections.erase(steps[1].intersections.begin()); // otherwise we copy the
-                                                                      // source
-        if (leavesRoundabout(steps[1].maneuver.instruction))
-            steps[1].maneuver.exit = 1;
-        steps[0].duration = 0;
-        steps[0].distance = 0;
-        const auto exitToEnter = [](const TurnType::Enum type) {
-            if (TurnType::ExitRotary == type)
-                return TurnType::EnterRotary;
-            // if we do not enter the roundabout Intersection, we cannot treat the full traversal as
-            // a turn. So we switch it up to the roundabout type
-            else if (type == TurnType::ExitRoundaboutIntersection)
-                return TurnType::EnterRoundabout;
-            else
-                return TurnType::EnterRoundabout;
-        };
-        steps[1].maneuver.instruction.type = exitToEnter(step.maneuver.instruction.type);
-        if (steps[1].maneuver.instruction.type == TurnType::EnterRotary)
+        auto exit = std::find_if(itr, range.second, leaves_roundabout);
+        if (exit == range.second)
         {
-            steps[1].rotary_name = steps[0].name;
-            steps[1].rotary_pronunciation = steps[0].pronunciation;
+            processRoundaboutExits(itr, exit);
+            itr = exit;
         }
-    }
-
-    if (step_index > 1)
-    {
-        auto &exit_step = steps[step_index];
-        auto &prev_step = steps[step_index - 1];
-        // In case the step with the roundabout exit instruction cannot be merged with the
-        // previous step we change the instruction to a normal turn
-        if (!guidance::haveSameMode(exit_step, prev_step))
+        else
         {
-            BOOST_ASSERT(leavesRoundabout(exit_step.maneuver.instruction));
-            if (!entersRoundabout(prev_step.maneuver.instruction))
-            {
-                prev_step.maneuver.instruction = exit_step.maneuver.instruction;
-            }
-            prev_step.maneuver.exit = exit_step.maneuver.exit;
-            exit_step.maneuver.instruction.type = TurnType::Notification;
-            step_index--;
+            processRoundaboutExits(itr, exit + 1);
+            itr = exit + 1;
         }
-    }
-
-    // Normal exit from the roundabout, or exit from a previously fixed roundabout. Propagate the
-    // index back to the entering location and prepare the current silent set of instructions for
-    // removal.
-    std::vector<std::size_t> intermediate_steps;
-    BOOST_ASSERT(!steps[step_index].intersections.empty());
-    // the very first intersection in the steps represents the location of the turn. Following
-    // intersections are locations passed along the way
-    const auto exit_intersection = steps[step_index].intersections.front();
-    const auto exit_bearing = exit_intersection.bearings[exit_intersection.out];
-    const auto destination_copy = step;
-
-    if (step_index > 1)
-    {
-        // The very first route-step is head, so we cannot iterate past that one
-        for (std::size_t propagation_index = step_index - 1; propagation_index > 0;
-             --propagation_index)
-        {
-            auto &propagation_step = steps[propagation_index];
-            auto &next_step = steps[propagation_index + 1];
-            if (guidance::haveSameMode(propagation_step, next_step))
-            {
-                propagation_step.ElongateBy(next_step);
-                propagation_step.maneuver.exit = next_step.maneuver.exit;
-                next_step.Invalidate();
-            }
-
-            if (entersRoundabout(propagation_step.maneuver.instruction))
-            {
-                const auto entry_intersection = propagation_step.intersections.front();
-
-                // remember rotary name
-                if (propagation_step.maneuver.instruction.type == TurnType::EnterRotary ||
-                    propagation_step.maneuver.instruction.type == TurnType::EnterRotaryAtExit)
-                {
-                    propagation_step.rotary_name = propagation_step.name;
-                    propagation_step.rotary_pronunciation = propagation_step.pronunciation;
-                }
-                else if (propagation_step.maneuver.instruction.type ==
-                             TurnType::EnterRoundaboutIntersection ||
-                         propagation_step.maneuver.instruction.type ==
-                             TurnType::EnterRoundaboutIntersectionAtExit)
-                {
-                    BOOST_ASSERT(!propagation_step.intersections.empty());
-                    const double angle = util::bearing::angleBetween(
-                        util::bearing::reverse(entry_intersection.bearings[entry_intersection.in]),
-                        exit_bearing);
-
-                    auto bearings = propagation_step.intersections.front().bearings;
-                    propagation_step.maneuver.instruction.direction_modifier =
-                        getTurnDirection(angle);
-                }
-
-                propagation_step.AdaptStepSignage(destination_copy);
-                break;
-            }
-        }
-        // remove exit
     }
 }
 
@@ -248,64 +177,49 @@ void closeOffRoundabout(const bool on_roundabout,
 // They are required for maintenance purposes. We can calculate the number
 // of exits to pass in a roundabout and the number of intersections
 // that we come across.
-std::vector<RouteStep> postProcess(std::vector<RouteStep> steps)
+std::vector<RouteStep> handleRoundabouts(std::vector<RouteStep> steps)
 {
-    // the steps should always include the first/last step in form of a location
-    BOOST_ASSERT(steps.size() >= 2);
-    if (steps.size() == 2)
+    // check if a step has roundabout type
+    const auto has_roundabout_type = [](auto const &step) {
+        return hasRoundaboutType(step.maneuver.instruction);
+    };
+    const auto first_roundabout_type =
+        std::find_if(steps.begin(), steps.end(), has_roundabout_type);
+
+    // no roundabout to process?
+    if (first_roundabout_type == steps.end())
         return steps;
 
-    // Count Street Exits forward
-    bool on_roundabout = false;
-    bool has_entered_roundabout = false;
+    // unless the first instruction enters the roundabout, we are currently on a roundabout. This is
+    // a special case that happens if the route starts on a roundabout. It is a border case, but
+    // could happen during re-routing. In the case of re-routing, exit counting might be confusing,
+    // but it is the best we can do
+    bool currently_on_roundabout = !entersRoundabout(first_roundabout_type->maneuver.instruction);
 
-    // count the exits forward. if enter/exit roundabout happen both, no further treatment is
-    // required. We might end up with only one of them (e.g. starting within a roundabout)
-    // or having a via-point in the roundabout.
-    // In this case, exits are numbered from the start of the leg.
-    for (std::size_t step_index = 0; step_index < steps.size(); ++step_index)
-    {
-        const auto next_step_index = step_index + 1;
-        auto &step = steps[step_index];
-        const auto instruction = step.maneuver.instruction;
-        if (entersRoundabout(instruction))
+    // this group by paradigm does might contain intermediate roundabout instructions, when they are
+    // directly connected. Otherwise it will be a sequence containing everything from enter to exit.
+    // If we already start on the roundabout, the first valid place will be steps.begin().
+    const auto is_on_roundabout = [&currently_on_roundabout](const auto &step) {
+        if (currently_on_roundabout)
         {
-            has_entered_roundabout = setUpRoundabout(step);
+            if (leavesRoundabout(step.maneuver.instruction))
+                currently_on_roundabout = false;
 
-            if (has_entered_roundabout && next_step_index < steps.size())
-                steps[next_step_index].maneuver.exit = step.maneuver.exit;
+            return true;
         }
-        else if (instruction.type == TurnType::StayOnRoundabout)
+        else
         {
-            on_roundabout = true;
-            // increase the exit number we require passing the exit
-            step.maneuver.exit += 1;
-            if (next_step_index < steps.size())
-                steps[next_step_index].maneuver.exit = step.maneuver.exit;
+            currently_on_roundabout = entersRoundabout(step.maneuver.instruction);
+            auto result = currently_on_roundabout;
+            // cases that immediately exit the roundabout
+            if (currently_on_roundabout)
+                currently_on_roundabout = !leavesRoundabout(step.maneuver.instruction);
+            return result;
         }
-        else if (leavesRoundabout(instruction))
-        {
-            // if (!has_entered_roundabout)
-            // in case the we are not on a roundabout, the very first instruction
-            // after the depart will be transformed into a roundabout and become
-            // the first valid instruction
-            closeOffRoundabout(has_entered_roundabout, steps, step_index);
-            has_entered_roundabout = false;
-            on_roundabout = false;
-        }
-        else if (on_roundabout && next_step_index < steps.size())
-        {
-            steps[next_step_index].maneuver.exit = step.maneuver.exit;
-        }
-    }
+    };
 
-    // unterminated roundabout
-    // Move backwards through the instructions until the start and remove the exit number
-    // A roundabout without exit translates to enter-roundabout
-    if (has_entered_roundabout || on_roundabout)
-    {
-        fixFinalRoundabout(steps);
-    }
+    // for each range of instructions between begin/end of a roundabout assign
+    util::group_by(steps.begin(), steps.end(), is_on_roundabout, processRoundaboutGroups);
 
     BOOST_ASSERT(steps.front().intersections.size() >= 1);
     BOOST_ASSERT(steps.front().intersections.front().bearings.size() == 1);
@@ -333,8 +247,7 @@ void trimShortSegments(std::vector<RouteStep> &steps, LegGeometry &geometry)
         return;
 
     // if phantom node is located at the connection of two segments, either one can be selected
-    // as
-    // turn
+    // as turn
     //
     // a --- b
     //       |
@@ -370,6 +283,7 @@ void trimShortSegments(std::vector<RouteStep> &steps, LegGeometry &geometry)
                                         geometry.osm_node_ids.begin() + offset);
         }
 
+        auto const first_bearing = steps.front().maneuver.bearing_after;
         // We have to adjust the first step both for its name and the bearings
         if (zero_length_step)
         {
@@ -426,10 +340,15 @@ void trimShortSegments(std::vector<RouteStep> &steps, LegGeometry &geometry)
         });
 
         auto &first_step = steps.front();
+        auto bearing = first_bearing;
         // we changed the geometry, we need to recalculate the bearing
-        auto bearing = std::round(util::coordinate_calculation::bearing(
-            geometry.locations[first_step.geometry_begin],
-            geometry.locations[first_step.geometry_begin + 1]));
+        if (geometry.locations[first_step.geometry_begin] !=
+            geometry.locations[first_step.geometry_begin + 1])
+        {
+            bearing = std::round(util::coordinate_calculation::bearing(
+                geometry.locations[first_step.geometry_begin],
+                geometry.locations[first_step.geometry_begin + 1]));
+        }
         first_step.maneuver.bearing_after = bearing;
         first_step.intersections.front().bearings.front() = bearing;
     }
@@ -457,7 +376,7 @@ void trimShortSegments(std::vector<RouteStep> &steps, LegGeometry &geometry)
         geometry.segment_offsets.pop_back();
         // remove all the last coordinates from the geometry
         geometry.locations.resize(geometry.segment_offsets.back() + 1);
-        geometry.annotations.resize(geometry.segment_offsets.back() + 1);
+        geometry.annotations.resize(geometry.segment_offsets.back());
         geometry.osm_node_ids.resize(geometry.segment_offsets.back() + 1);
 
         BOOST_ASSERT(geometry.segment_distances.back() <= 1);
@@ -516,6 +435,10 @@ void trimShortSegments(std::vector<RouteStep> &steps, LegGeometry &geometry)
         last_step.intersections.front().bearings.front() = util::bearing::reverse(bearing);
     }
 
+    BOOST_ASSERT(geometry.segment_offsets.back() + 1 == geometry.locations.size());
+    BOOST_ASSERT(geometry.segment_offsets.back() + 1 == geometry.osm_node_ids.size());
+    BOOST_ASSERT(geometry.segment_offsets.back() == geometry.annotations.size());
+
     BOOST_ASSERT(steps.back().geometry_end == geometry.locations.size());
 
     BOOST_ASSERT(steps.front().intersections.size() >= 1);
@@ -547,7 +470,7 @@ std::vector<RouteStep> assignRelativeLocations(std::vector<RouteStep> steps,
                 distance_to_start <= MAXIMAL_RELATIVE_DISTANCE
             ? bearingToDirectionModifier(util::coordinate_calculation::computeAngle(
                   source_node.input_location, leg_geometry.locations[0], leg_geometry.locations[1]))
-            : extractor::guidance::DirectionModifier::UTurn;
+            : DirectionModifier::UTurn;
 
     steps.front().maneuver.instruction.direction_modifier = initial_modifier;
 
@@ -560,7 +483,7 @@ std::vector<RouteStep> assignRelativeLocations(std::vector<RouteStep> steps,
                   leg_geometry.locations[leg_geometry.locations.size() - 2],
                   leg_geometry.locations[leg_geometry.locations.size() - 1],
                   target_node.input_location))
-            : extractor::guidance::DirectionModifier::UTurn;
+            : DirectionModifier::UTurn;
 
     steps.back().maneuver.instruction.direction_modifier = final_modifier;
 
@@ -651,6 +574,150 @@ std::vector<RouteStep> buildIntersections(std::vector<RouteStep> steps)
         }
     }
     return removeNoTurnInstructions(std::move(steps));
+}
+
+void applyOverrides(const datafacade::BaseDataFacade &facade,
+                    std::vector<RouteStep> &steps,
+                    const LegGeometry &leg_geometry)
+{
+    // Find overrides that match, and apply them
+    // The +/-1 here are to remove the depart and arrive steps, which
+    // we don't allow updates to
+    for (auto current_step_it = steps.begin(); current_step_it != steps.end(); ++current_step_it)
+    {
+        util::Log(logDEBUG) << "Searching for " << current_step_it->from_id << std::endl;
+        const auto overrides = facade.GetOverridesThatStartAt(current_step_it->from_id);
+        if (overrides.empty())
+            continue;
+        util::Log(logDEBUG) << "~~~~ GOT A HIT, checking the rest ~~~" << std::endl;
+        for (const extractor::ManeuverOverride &maneuver_relation : overrides)
+        {
+            util::Log(logDEBUG) << "Override sequence is ";
+            for (auto &n : maneuver_relation.node_sequence)
+            {
+                util::Log(logDEBUG) << n << " ";
+            }
+            util::Log(logDEBUG) << std::endl;
+            util::Log(logDEBUG) << "Override type is "
+                                << osrm::guidance::internalInstructionTypeToString(
+                                       maneuver_relation.override_type)
+                                << std::endl;
+            util::Log(logDEBUG) << "Override direction is "
+                                << osrm::guidance::instructionModifierToString(
+                                       maneuver_relation.direction)
+                                << std::endl;
+
+            util::Log(logDEBUG) << "Route sequence is ";
+            for (auto it = current_step_it; it != steps.end(); ++it)
+            {
+                util::Log(logDEBUG) << it->from_id << " ";
+            }
+            util::Log(logDEBUG) << std::endl;
+
+            auto search_iter = maneuver_relation.node_sequence.begin();
+            auto route_iter = current_step_it;
+            while (search_iter != maneuver_relation.node_sequence.end())
+            {
+                if (route_iter == steps.end())
+                    break;
+
+                if (*search_iter == route_iter->from_id)
+                {
+                    ++search_iter;
+                    ++route_iter;
+                    continue;
+                }
+                // Skip over duplicated EBNs in the step array
+                // EBNs are sometime duplicated because guidance code inserts
+                // "fake" steps that it later removes.  This hasn't happened yet
+                // at this point, but we can safely just skip past the dupes.
+                if ((route_iter - 1)->from_id == route_iter->from_id)
+                {
+                    ++route_iter;
+                    continue;
+                }
+                // If we get here, the values got out of sync so it's not
+                // a match.
+                break;
+            }
+
+            // We got a match, update using the instruction_node
+            if (search_iter == maneuver_relation.node_sequence.end())
+            {
+                util::Log(logDEBUG) << "Node sequence matched, looking for the step "
+                                    << "that has the via node" << std::endl;
+                const auto via_node_coords =
+                    facade.GetCoordinateOfNode(maneuver_relation.instruction_node);
+                // Find the step that has the instruction_node at the intersection point
+                auto step_to_update = std::find_if(
+                    current_step_it,
+                    route_iter,
+                    [&leg_geometry, &via_node_coords](const auto &step) {
+                        util::Log(logDEBUG) << "Leg geom from " << step.geometry_begin << " to  "
+                                            << step.geometry_end << std::endl;
+
+                        // iterators over geometry of current step
+                        auto begin = leg_geometry.locations.begin() + step.geometry_begin;
+                        auto end = leg_geometry.locations.begin() + step.geometry_end;
+                        auto via_match = std::find_if(begin, end, [&](const auto &location) {
+                            return location == via_node_coords;
+                        });
+                        if (via_match != end)
+                        {
+                            util::Log(logDEBUG)
+                                << "Found geometry match at "
+                                << (std::distance(begin, end) - std::distance(via_match, end))
+                                << std::endl;
+                        }
+                        util::Log(logDEBUG)
+                            << ((*(leg_geometry.locations.begin() + step.geometry_begin) ==
+                                 via_node_coords)
+                                    ? "true"
+                                    : "false")
+                            << std::endl;
+                        return *(leg_geometry.locations.begin() + step.geometry_begin) ==
+                               via_node_coords;
+                        // return via_match != end;
+                    });
+                // We found a step that had the intersection_node coordinate
+                // in its geometry
+                if (step_to_update != route_iter)
+                {
+                    // Don't update the last step (it's an arrive instruction)
+                    util::Log(logDEBUG) << "Updating step "
+                                        << std::distance(steps.begin(), steps.end()) -
+                                               std::distance(step_to_update, steps.end())
+                                        << std::endl;
+                    if (maneuver_relation.override_type != osrm::guidance::TurnType::MaxTurnType)
+                    {
+                        util::Log(logDEBUG) << "    instruction was "
+                                            << osrm::guidance::internalInstructionTypeToString(
+                                                   step_to_update->maneuver.instruction.type)
+                                            << " now "
+                                            << osrm::guidance::internalInstructionTypeToString(
+                                                   maneuver_relation.override_type)
+                                            << std::endl;
+                        step_to_update->maneuver.instruction.type = maneuver_relation.override_type;
+                    }
+                    if (maneuver_relation.direction !=
+                        osrm::guidance::DirectionModifier::MaxDirectionModifier)
+                    {
+                        util::Log(logDEBUG)
+                            << "    direction was "
+                            << osrm::guidance::instructionModifierToString(
+                                   step_to_update->maneuver.instruction.direction_modifier)
+                            << " now " << osrm::guidance::instructionModifierToString(
+                                              maneuver_relation.direction)
+                            << std::endl;
+                        step_to_update->maneuver.instruction.direction_modifier =
+                            maneuver_relation.direction;
+                    }
+                    // step_to_update->is_overridden = true;
+                }
+            }
+        }
+        util::Log(logDEBUG) << "Done tweaking steps" << std::endl;
+    }
 }
 
 } // namespace guidance

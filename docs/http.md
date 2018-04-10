@@ -120,6 +120,7 @@ In addition to the [general options](#general-options) the following options are
 - `code` if the request was successful `Ok` otherwise see the service dependent and general status codes.
 - `waypoints` array of `Waypoint` objects sorted by distance to the input coordinate. Each object has at least the following additional properties:
   - `distance`: Distance in meters to the supplied input coordinate.
+  - `nodes`: Array of OpenStreetMap node ids.
 
 #### Example Requests
 
@@ -134,6 +135,10 @@ curl 'http://router.project-osrm.org/nearest/v1/driving/13.388860,52.517037?numb
 {
    "waypoints" : [
       {
+         "nodes": [
+            2264199819,
+            0
+         ],
          "hint" : "KSoKADRYroqUBAEAEAAAABkAAAAGAAAAAAAAABhnCQCLtwAA_0vMAKlYIQM8TMwArVghAwEAAQH1a66g",
          "distance" : 4.152629,
          "name" : "Friedrichstraße",
@@ -143,6 +148,10 @@ curl 'http://router.project-osrm.org/nearest/v1/driving/13.388860,52.517037?numb
          ]
       },
       {
+         "nodes": [
+            2045820592,
+            0
+         ],
          "hint" : "KSoKADRYroqUBAEABgAAAAAAAAAAAAAAKQAAABhnCQCLtwAA7kvMAAxZIQM8TMwArVghAwAAAQH1a66g",
          "distance" : 11.811961,
          "name" : "Friedrichstraße",
@@ -152,6 +161,10 @@ curl 'http://router.project-osrm.org/nearest/v1/driving/13.388860,52.517037?numb
          ]
       },
       {
+         "nodes": [
+            0,
+            21487242
+         ],
          "hint" : "KioKgDbbDgCUBAEAAAAAABoAAAAAAAAAPAAAABlnCQCLtwAA50vMADJZIQM8TMwArVghAwAAAQH1a66g",
          "distance" : 15.872438,
          "name" : "Friedrichstraße",
@@ -288,6 +301,7 @@ In addition to the [general options](#general-options) the following options are
 |radiuses    |`{radius};{radius}[;{radius} ...]`              |Standard deviation of GPS precision used for map matching. If applicable use GPS accuracy.|
 |gaps        |`split` (default), `ignore`                     |Allows the input track splitting based on huge timestamp gaps between points.             |
 |tidy        |`true`, `false` (default)                       |Allows the input track modification to obtain better matching quality for noisy tracks.   |
+|waypoints   | `{index};{index};{index}...`                   |Treats input coordinates indicated by given indices as waypoints in returned Match object. Default is to treat all input coordinates as waypoints.    |
 
 |Parameter   |Values                             |
 |------------|-----------------------------------|
@@ -437,6 +451,8 @@ Vector tiles contain two layers:
 | `turn_angle` | `integer` | the angle of the turn, relative to the `bearing_in`.  -180 to +180, 0 = straight ahead, 90 = 90-degrees to the right |
 | `cost`       | `float`   | the time we think it takes to make that turn, in seconds.  May be negative, depending on how the data model is constructed (some turns get a "bonus"). |
 | `weight`     | `float`   | the weight we think it takes to make that turn.  May be negative, depending on how the data model is constructed (some turns get a "bonus"). ACTUAL ROUTING USES THIS VALUE |
+| `type`       | `string`  | the type of this turn - values like `turn`, `continue`, etc.  See the `StepManeuver` for a partial list, this field also exposes internal turn types that are never returned with an API response |
+| `modifier`   | `string`  | the direction modifier of the turn (`left`, `sharp left`, etc) |
 
 
 ## Result objects
@@ -512,10 +528,10 @@ Represents a route between two waypoints.
 
 - `annotation`: Additional details about each coordinate along the route geometry:
 
-| annotations  |                                                                       |
-|--------------|-----------------------------------------------------------------------|
-| true         | An `Annotation` object containing node ids, durations distances and   |
-| false        | weights `undefined`                                                   |
+| annotations  |                                                                               |
+|--------------|-------------------------------------------------------------------------------|
+| true         | An `Annotation` object containing node ids, durations, distances and weights. |
+| false        | `undefined`                                                                   |
 
 #### Example
 
@@ -531,6 +547,7 @@ With `steps=false` and `annotations=true`:
     "distance": [5,5,10,5,5],
     "duration": [15,15,40,15,15],
     "datasources": [1,0,0,0,1],
+    "metadata": { "datasource_names": ["traffic","lua profile","lua profile","lua profile","traffic"] },
     "nodes": [49772551,49772552,49786799,49786800,49786801,49786802],
     "speed": [0.3, 0.3, 0.3, 0.3, 0.3]
   }
@@ -545,10 +562,12 @@ Annotation of the whole route leg with fine-grained information about each segme
 
 - `distance`: The distance, in metres, between each pair of coordinates
 - `duration`: The duration between each pair of coordinates, in seconds.  Does not include the duration of any turns.
-- `datasources`: The index of the datasource for the speed between each pair of coordinates. `0` is the default profile, other values are supplied via `--segment-speed-file` to `osrm-contract`
+- `datasources`: The index of the datasource for the speed between each pair of coordinates. `0` is the default profile, other values are supplied via `--segment-speed-file` to `osrm-contract` or `osrm-customize`.  String-like names are in the `metadata.datasource_names` array.
 - `nodes`: The OSM node ID for each coordinate along the route, excluding the first/last user-supplied coordinates
 - `weight`: The weights between each pair of coordinates.  Does not include any turn costs.
 - `speed`: Convenience field, calculation of `distance / duration` rounded to one decimal place
+- `metadata`: Metadata related to other annotations
+  - `datasource_names`: The names of the datasources used for the speed between each pair of coordinates.  `lua profile` is the default profile, other values arethe filenames supplied via `--segment-speed-file` to `osrm-contract` or `osrm-customize`
 
 #### Example
 
@@ -557,6 +576,7 @@ Annotation of the whole route leg with fine-grained information about each segme
   "distance": [5,5,10,5,5],
   "duration": [15,15,40,15,15],
   "datasources": [1,0,0,0,1],
+  "metadata": { "datasource_names": ["traffic","lua profile","lua profile","lua profile","traffic"] },
   "nodes": [49772551,49772552,49786799,49786800,49786801,49786802],
   "weight": [15,15,40,15,15]
 }
@@ -584,7 +604,7 @@ step.
 
 - `name`: The name of the way along which travel proceeds.
 - `ref`: A reference number or code for the way. Optionally included, if ref data is available for the given way.
-- `pronunciation`: The pronunciation hint of the way name. Will be `undefined` if there is no pronunciation hit.
+- `pronunciation`: A string containing an [IPA](https://en.wikipedia.org/wiki/International_Phonetic_Alphabet) phonetic transcription indicating how to pronounce the name in the `name` property. This property is omitted if pronunciation data is unavailable for the step.
 - `destinations`: The destinations of the way. Will be `undefined` if there are no destinations.
 - `exits`: The exit numbers or names of the way. Will be `undefined` if there are no exit numbers or names.
 - `mode`: A string signifying the mode of transportation.
@@ -592,6 +612,7 @@ step.
 - `intersections`: A list of `Intersection` objects that are passed along the segment, the very first belonging to the StepManeuver
 - `rotary_name`: The name for the rotary. Optionally included, if the step is a rotary and a rotary name is available.
 - `rotary_pronunciation`: The pronunciation hint of the rotary name. Optionally included, if the step is a rotary and a rotary pronunciation is available.
+- `driving_side`: The legal driving side at the location for this step.  Either `left` or `right`.
 
 #### Example
 
@@ -662,10 +683,12 @@ step.
 | `end of road`    | road ends in a T intersection turn in direction of `modifier`|
 | `use lane`       | **Deprecated** replaced by lanes on all intersection entries |
 | `continue`       | Turn in direction of `modifier` to stay on the same road     |
-| `roundabout`     | traverse roundabout, has additional property `exit` with NR if the roundabout is left. The modifier specifies the direction of entering the roundabout. |
+| `roundabout`     | traverse roundabout, if the route leaves the roundabout there will be an additional property `exit` for exit counting. The modifier specifies the direction of entering the roundabout. |
 | `rotary`         | a traffic circle. While very similar to a larger version of a roundabout, it does not necessarily follow roundabout rules for right of way. It can offer `rotary_name` and/or `rotary_pronunciation` parameters (located in the RouteStep object) in addition to the `exit` parameter (located on the StepManeuver object).  |
 | `roundabout turn`| Describes a turn at a small roundabout that should be treated as normal turn. The `modifier` indicates the turn direciton. Example instruction: `At the roundabout turn left`. |
 | `notification`   | not an actual turn but a change in the driving conditions. For example the travel mode or classes. If the road takes a turn itself, the `modifier` describes the direction |
+| `exit roundabout`| Describes a maneuver exiting a roundabout (usually preceeded by a `roundabout` instruction) |
+| `exit rotary`    | Describes the maneuver exiting a rotary (large named roundabout) |
 
   Please note that even though there are `new name` and `notification` instructions, the `mode` and `name` can change
   between all instructions. They only offer a fallback in case nothing else is to report.

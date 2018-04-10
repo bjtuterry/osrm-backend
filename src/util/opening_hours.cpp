@@ -137,12 +137,12 @@ struct opening_hours_grammar : qi::grammar<Iterator, Skipper, std::vector<Openin
         using qi::_a;
         using qi::_b;
         using qi::_c;
-        using qi::_r1;
         using qi::_pass;
+        using qi::_r1;
         using qi::_val;
+        using qi::char_;
         using qi::eoi;
         using qi::lit;
-        using qi::char_;
         using qi::uint_;
         using oh = osrm::util::OpeningHours;
 
@@ -303,7 +303,7 @@ struct opening_hours_grammar : qi::grammar<Iterator, Skipper, std::vector<Openin
 
         daynum
             = uint2_p[_pass = bind([](unsigned x) { return 01 <= x && x <= 31; }, _1), _val = _1]
-            >> (&~lit(':') | eoi)
+            >> !qi::no_skip[lit(':') >> uint2_p] // distinguish "daynum:.." from "hour:minute"
             ;
 
         weeknum = uint2_p[_pass = bind([](unsigned x) { return 01 <= x && x <= 53; }, _1), _val = _1];

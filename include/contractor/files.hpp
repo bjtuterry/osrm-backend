@@ -1,12 +1,9 @@
 #ifndef OSRM_CONTRACTOR_FILES_HPP
 #define OSRM_CONTRACTOR_FILES_HPP
 
-#include "contractor/query_graph.hpp"
+#include "contractor/serialization.hpp"
 
-#include "util/serialization.hpp"
-
-#include "storage/io.hpp"
-#include "storage/serialization.hpp"
+#include <unordered_map>
 
 namespace osrm
 {
@@ -14,74 +11,46 @@ namespace contractor
 {
 namespace files
 {
-// reads .osrm.core
-template <typename CoreVectorT>
-void readCoreMarker(const boost::filesystem::path &path, CoreVectorT &is_core_node)
-{
-    static_assert(util::is_view_or_vector<bool, CoreVectorT>::value,
-                  "is_core_node must be a vector");
-    storage::io::FileReader reader(path, storage::io::FileReader::VerifyFingerprint);
-
-    storage::serialization::read(reader, is_core_node);
-}
-
-// writes .osrm.core
-template <typename CoreVectorT>
-void writeCoreMarker(const boost::filesystem::path &path, const CoreVectorT &is_core_node)
-{
-    static_assert(util::is_view_or_vector<bool, CoreVectorT>::value,
-                  "is_core_node must be a vector");
-    storage::io::FileWriter writer(path, storage::io::FileWriter::GenerateFingerprint);
-
-    storage::serialization::write(writer, is_core_node);
-}
-
 // reads .osrm.hsgr file
-template <typename QueryGraphT>
-inline void readGraph(const boost::filesystem::path &path, unsigned &checksum, QueryGraphT &graph)
+template <typename ContractedMetricT>
+inline void readGraph(const boost::filesystem::path &path,
+                      std::unordered_map<std::string, ContractedMetricT> &metrics,
+                      std::uint32_t &connectivity_checksum)
 {
-    static_assert(std::is_same<QueryGraphView, QueryGraphT>::value ||
-                      std::is_same<QueryGraph, QueryGraphT>::value,
-                  "graph must be of type QueryGraph<>");
+    static_assert(std::is_same<ContractedMetric, ContractedMetricT>::value ||
+                      std::is_same<ContractedMetricView, ContractedMetricT>::value,
+                  "metric must be of type ContractedMetric<>");
 
-    const auto fingerprint = storage::io::FileReader::VerifyFingerprint;
-    storage::io::FileReader reader{path, fingerprint};
+    const auto fingerprint = storage::tar::FileReader::VerifyFingerprint;
+    storage::tar::FileReader reader{path, fingerprint};
 
-    reader.ReadInto(checksum);
-    util::serialization::read(reader, graph);
+    reader.ReadInto("/ch/connectivity_checksum", connectivity_checksum);
+
+    for (auto &pair : metrics)
+    {
+        serialization::read(reader, "/ch/metrics/" + pair.first, pair.second);
+    }
 }
 
 // writes .osrm.hsgr file
-template <typename QueryGraphT>
-inline void
-writeGraph(const boost::filesystem::path &path, unsigned checksum, const QueryGraphT &graph)
+template <typename ContractedMetricT>
+inline void writeGraph(const boost::filesystem::path &path,
+                       const std::unordered_map<std::string, ContractedMetricT> &metrics,
+                       const std::uint32_t connectivity_checksum)
 {
-    static_assert(std::is_same<QueryGraphView, QueryGraphT>::value ||
-                      std::is_same<QueryGraph, QueryGraphT>::value,
-                  "graph must be of type QueryGraph<>");
-    const auto fingerprint = storage::io::FileWriter::GenerateFingerprint;
-    storage::io::FileWriter writer{path, fingerprint};
+    static_assert(std::is_same<ContractedMetric, ContractedMetricT>::value ||
+                      std::is_same<ContractedMetricView, ContractedMetricT>::value,
+                  "metric must be of type ContractedMetric<>");
+    const auto fingerprint = storage::tar::FileWriter::GenerateFingerprint;
+    storage::tar::FileWriter writer{path, fingerprint};
 
-    writer.WriteOne(checksum);
-    util::serialization::write(writer, graph);
-}
+    writer.WriteElementCount64("/ch/connectivity_checksum", 1);
+    writer.WriteFrom("/ch/connectivity_checksum", connectivity_checksum);
 
-// reads .levels file
-inline void readLevels(const boost::filesystem::path &path, std::vector<float> &node_levels)
-{
-    const auto fingerprint = storage::io::FileReader::VerifyFingerprint;
-    storage::io::FileReader reader{path, fingerprint};
-
-    storage::serialization::read(reader, node_levels);
-}
-
-// writes .levels file
-inline void writeLevels(const boost::filesystem::path &path, const std::vector<float> &node_levels)
-{
-    const auto fingerprint = storage::io::FileWriter::GenerateFingerprint;
-    storage::io::FileWriter writer{path, fingerprint};
-
-    storage::serialization::write(writer, node_levels);
+    for (const auto &pair : metrics)
+    {
+        serialization::write(writer, "/ch/metrics/" + pair.first, pair.second);
+    }
 }
 }
 }

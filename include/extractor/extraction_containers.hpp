@@ -7,7 +7,7 @@
 #include "extractor/restriction.hpp"
 #include "extractor/scripting_environment.hpp"
 
-#include "storage/io.hpp"
+#include "storage/tar_fwd.hpp"
 
 namespace osrm
 {
@@ -23,17 +23,20 @@ namespace extractor
 class ExtractionContainers
 {
     void PrepareNodes();
+    void PrepareManeuverOverrides();
     void PrepareRestrictions();
     void PrepareEdges(ScriptingEnvironment &scripting_environment);
 
-    void WriteNodes(storage::io::FileWriter &file_out) const;
-    void WriteEdges(storage::io::FileWriter &file_out) const;
+    void WriteNodes(storage::tar::FileWriter &file_out) const;
+    void WriteEdges(storage::tar::FileWriter &file_out) const;
+    void WriteMetadata(storage::tar::FileWriter &file_out) const;
     void WriteCharData(const std::string &file_name);
 
   public:
     using NodeIDVector = std::vector<OSMNodeID>;
     using NodeVector = std::vector<QueryNode>;
     using EdgeVector = std::vector<InternalExtractorEdge>;
+    using AnnotationDataVector = std::vector<NodeBasedEdgeAnnotation>;
     using WayIDStartEndVector = std::vector<FirstAndLastSegmentOfWay>;
     using NameCharData = std::vector<unsigned char>;
     using NameOffsets = std::vector<unsigned>;
@@ -43,6 +46,7 @@ class ExtractionContainers
     NodeIDVector used_node_id_list;
     NodeVector all_nodes_list;
     EdgeVector all_edges_list;
+    AnnotationDataVector all_edges_annotation_data_list;
     NameCharData name_char_data;
     NameOffsets name_offsets;
     // an adjacency array containing all turn lane masks
@@ -59,6 +63,9 @@ class ExtractionContainers
     // turn restrictions split into conditional and unconditional turn restrictions
     std::vector<ConditionalTurnRestriction> conditional_turn_restrictions;
     std::vector<TurnRestriction> unconditional_turn_restrictions;
+
+    std::vector<InputManeuverOverride> external_maneuver_overrides_list;
+    std::vector<UnresolvedManeuverOverride> internal_maneuver_overrides;
 
     ExtractionContainers();
 

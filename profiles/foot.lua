@@ -33,6 +33,7 @@ function setup()
       'toll_booth',
       'sally_port',
       'gate',
+      'lift_gate',
       'no',
       'kerb',
       'block'
@@ -63,6 +64,9 @@ function setup()
       'foot',
       'access'
     },
+
+    -- tags disallow access to in combination with highway=service
+    service_access_tag_blacklist = Set { },
 
     restrictions = Sequence {
       'foot'
@@ -237,10 +241,13 @@ function process_way(profile, way, result)
     WayHandlers.startpoint,
 
     -- set name, ref and pronunciation
-    WayHandlers.names
+    WayHandlers.names,
+
+    -- set weight properties of the way
+    WayHandlers.weights
   }
 
-  WayHandlers.run(profile,way,result,data,handlers)
+  WayHandlers.run(profile, way, result, data, handlers)
 end
 
 function process_turn (profile, turn)

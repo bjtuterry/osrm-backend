@@ -27,7 +27,7 @@ namespace routing_algorithms
 using namespace mld;
 
 using Heap = SearchEngineData<Algorithm>::QueryHeap;
-using Partition = partition::MultiLevelPartitionView;
+using Partition = partitioner::MultiLevelPartitionView;
 using Facade = DataFacade<Algorithm>;
 
 // Implementation details
@@ -65,7 +65,6 @@ struct WeightedViaNodePackedPath
 {
     WeightedViaNode via;
     PackedPath path;
-    std::vector<EdgeWeight> path_weights;
 };
 
 // Represents a high-detail unpacked path (s, .., via, .., t)
@@ -234,6 +233,12 @@ RandIt filterPackedPathsByCellSharing(RandIt first, RandIt last, const Partition
         cells.insert(get_cell(std::get<1>(edge)));
 
     const auto over_sharing_limit = [&](const auto &packed) {
+
+        if (packed.path.empty())
+        { // don't remove routes with single-node (empty) path
+            return false;
+        }
+
         const auto not_seen = [&](const PackedEdge edge) {
             const auto source_cell = get_cell(std::get<0>(edge));
             const auto target_cell = get_cell(std::get<1>(edge));
@@ -311,7 +316,7 @@ RandIt filterPackedPathsByLocalOptimality(const WeightedViaNodePackedPath &path,
         // Check plateaux edges towards the target. Terminates at the source / target
         // at the latest, since parent(target)==target for the reverse heap and
         // parent(target) != target in the forward heap (and vice versa).
-        while (has_plateaux_at_node(node, fst, snd))
+        while (node != fst.GetData(node).parent && has_plateaux_at_node(node, fst, snd))
             node = fst.GetData(node).parent;
 
         return node;
@@ -321,7 +326,11 @@ RandIt filterPackedPathsByLocalOptimality(const WeightedViaNodePackedPath &path,
         BOOST_ASSERT(packed.via.node != path.via.node);
         BOOST_ASSERT(packed.via.weight != INVALID_EDGE_WEIGHT);
         BOOST_ASSERT(packed.via.node != SPECIAL_NODEID);
-        BOOST_ASSERT(!packed.path.empty());
+
+        if (packed.path.empty())
+        { // the edge case when packed.via.node is both source and target node
+            return false;
+        }
 
         const NodeID via = packed.via.node;
 
@@ -396,6 +405,12 @@ template <typename RandIt> RandIt filterUnpackedPathsBySharing(RandIt first, Ran
     edges.insert(begin(shortest_path.edges), begin(shortest_path.edges));
 
     const auto over_sharing_limit = [&](const auto &unpacked) {
+
+        if (unpacked.edges.empty())
+        { // don't remove routes with single-node (empty) path
+            return false;
+        }
+
         const auto not_seen = [&](const EdgeID edge) { return edges.count(edge) < 1; };
         const auto different = std::count_if(begin(unpacked.edges), end(unpacked.edges), not_seen);
 
@@ -455,9 +470,6 @@ void unpackPackedPaths(InputIt first,
     util::static_assert_iter_category<InputIt, std::input_iterator_tag>();
     util::static_assert_iter_category<OutIt, std::output_iterator_tag>();
     util::static_assert_iter_value<InputIt, WeightedViaNodePackedPath>();
-
-    const bool force_loop_forward = needsLoopForward(phantom_node_pair);
-    const bool force_loop_backward = needsLoopBackwards(phantom_node_pair);
 
     const Partition &partition = facade.GetMultiLevelPartition();
 
@@ -530,8 +542,8 @@ void unpackPackedPaths(InputIt first,
                                                                                 facade,
                                                                                 forward_heap,
                                                                                 reverse_heap,
-                                                                                force_loop_forward,
-                                                                                force_loop_backward,
+                                                                                DO_NOT_FORCE_LOOPS,
+                                                                                DO_NOT_FORCE_LOOPS,
                                                                                 INVALID_EDGE_WEIGHT,
                                                                                 sublevel,
                                                                                 parent_cell_id);
@@ -587,9 +599,6 @@ makeCandidateVias(SearchEngineData<Algorithm> &search_engine_data,
     // we're over factor * weight. We have to set the weight for routingStep to INVALID_EDGE_WEIGHT
     // so that stepping will continue even after we reached the shortest path upper bound.
 
-    const bool force_loop_forward = needsLoopForward(phantom_node_pair);
-    const bool force_loop_backward = needsLoopBackwards(phantom_node_pair);
-
     EdgeWeight forward_heap_min = forward_heap.MinKey();
     EdgeWeight reverse_heap_min = reverse_heap.MinKey();
 
@@ -615,8 +624,8 @@ makeCandidateVias(SearchEngineData<Algorithm> &search_engine_data,
                                            reverse_heap,
                                            overlap_via,
                                            overlap_weight,
-                                           force_loop_forward,
-                                           force_loop_backward,
+                                           DO_NOT_FORCE_LOOPS,
+                                           DO_NOT_FORCE_LOOPS,
                                            phantom_node_pair);
 
             if (!forward_heap.Empty())
@@ -641,8 +650,8 @@ makeCandidateVias(SearchEngineData<Algorithm> &search_engine_data,
                                            forward_heap,
                                            overlap_via,
                                            overlap_weight,
-                                           force_loop_forward,
-                                           force_loop_backward,
+                                           DO_NOT_FORCE_LOOPS,
+                                           DO_NOT_FORCE_LOOPS,
                                            phantom_node_pair);
 
             if (!reverse_heap.Empty())
@@ -659,94 +668,6 @@ makeCandidateVias(SearchEngineData<Algorithm> &search_engine_data,
     }
 
     return candidate_vias;
-}
-
-// Generates packed path edge weights based on a packed path, its total weight and the heaps.
-inline std::vector<EdgeWeight> retrievePackedPathWeightsFromHeap(const Heap &forward_heap,
-                                                                 const Heap &reverse_heap,
-                                                                 const PackedPath &packed_path,
-                                                                 const WeightedViaNode via)
-{
-    if (packed_path.empty())
-        return {};
-
-    std::vector<EdgeWeight> path_weights;
-    path_weights.reserve(packed_path.size());
-
-    // We need to retrieve edge weights either from the forward heap or the reverse heap.
-    // The heap depends on if we are on the s,via sub-path or on the via,t sub-path.
-    //
-    // There is an edge-case where the (from,to) has to==via. In this case the edge weight
-    // can only be retrieved by subtracting the heap weights from the total path weight.
-    //
-    // Note: heap.WasInserted(node) only guarantees that the search has seen the node,
-    // but does not guarantee for the node to be settled in the heap!
-
-    // The first edge could already be the edge-case with to==via as explained above.
-    bool after_via = std::get<0>(packed_path.front()) == via.node;
-
-    for (auto it = begin(packed_path), last = end(packed_path); it != last; ++it)
-    {
-        const auto from = std::get<0>(*it);
-        const auto to = std::get<1>(*it);
-
-        BOOST_ASSERT(forward_heap.WasInserted(from) || reverse_heap.WasInserted(from));
-        BOOST_ASSERT(forward_heap.WasInserted(to) || reverse_heap.WasInserted(to));
-
-        if (to != via.node && !after_via)
-        {
-            BOOST_ASSERT(forward_heap.WasInserted(from) && forward_heap.WasInserted(to));
-            const auto weight_from = forward_heap.GetKey(from);
-            const auto weight_to = forward_heap.GetKey(to);
-            BOOST_ASSERT(weight_to >= weight_from);
-            path_weights.push_back(weight_to - weight_from);
-        }
-
-        if (to != via.node && after_via)
-        {
-            BOOST_ASSERT(reverse_heap.WasInserted(from) && reverse_heap.WasInserted(to));
-            const auto weight_from = reverse_heap.GetKey(from);
-            const auto weight_to = reverse_heap.GetKey(to);
-            BOOST_ASSERT(weight_from >= weight_to);
-            path_weights.push_back(weight_from - weight_to);
-        }
-
-        if (to == via.node)
-        {
-            BOOST_ASSERT(forward_heap.WasInserted(from));
-            BOOST_ASSERT(reverse_heap.WasInserted(to));
-            const auto weight_from = forward_heap.GetKey(from);
-            const auto weight_to = reverse_heap.GetKey(to);
-            BOOST_ASSERT(via.weight >= (weight_from + weight_to));
-            path_weights.push_back(via.weight - (weight_from + weight_to));
-
-            after_via = true;
-        }
-    }
-
-    BOOST_ASSERT(path_weights.size() == packed_path.size());
-
-    // We inserted phantom nodes into the heaps, which means our start and target node
-    // already have weights in the heaps even without edges. The search we did to generate
-    // the total weight already includes these phantom node weights. Here we have to
-    // manually account for them by means of simply retrieving the inserted weights.
-    const auto assert_weights = [&] {
-        const auto s = std::get<0>(packed_path.front());
-        const auto t = std::get<1>(packed_path.back());
-        BOOST_ASSERT(forward_heap.WasInserted(s));
-        BOOST_ASSERT(reverse_heap.WasInserted(t));
-
-        const auto edge_weights =
-            std::accumulate(begin(path_weights), end(path_weights), EdgeWeight{0});
-        const auto phantom_node_weights = forward_heap.GetKey(s) + reverse_heap.GetKey(t);
-        (void)edge_weights;
-        (void)phantom_node_weights;
-        BOOST_ASSERT(via.weight == edge_weights + phantom_node_weights);
-    };
-    (void)assert_weights;
-    BOOST_ASSERT((assert_weights(), true));
-
-    return path_weights;
 }
 
 } // anon. ns
@@ -779,7 +700,8 @@ InternalManyRoutesResult alternativePathSearch(SearchEngineData<Algorithm> &sear
     const Partition &partition = facade.GetMultiLevelPartition();
 
     // Prepare heaps for usage below. The searches will modify them in-place.
-    search_engine_data.InitializeOrClearFirstThreadLocalStorage(facade.GetNumberOfNodes());
+    search_engine_data.InitializeOrClearFirstThreadLocalStorage(facade.GetNumberOfNodes(),
+                                                                facade.GetMaxBorderNodeID() + 1);
 
     Heap &forward_heap = *search_engine_data.forward_heap_1;
     Heap &reverse_heap = *search_engine_data.reverse_heap_1;
@@ -835,12 +757,8 @@ InternalManyRoutesResult alternativePathSearch(SearchEngineData<Algorithm> &sear
 
     const auto extract_packed_path_from_heaps = [&](WeightedViaNode via) {
         auto packed_path = retrievePackedPathFromHeap(forward_heap, reverse_heap, via.node);
-        auto path_weights =
-            retrievePackedPathWeightsFromHeap(forward_heap, reverse_heap, packed_path, via);
 
-        return WeightedViaNodePackedPath{std::move(via),           //
-                                         std::move(packed_path),   //
-                                         std::move(path_weights)}; //
+        return WeightedViaNodePackedPath{std::move(via), std::move(packed_path)};
     };
 
     std::vector<WeightedViaNodePackedPath> weighted_packed_paths;
@@ -867,9 +785,8 @@ InternalManyRoutesResult alternativePathSearch(SearchEngineData<Algorithm> &sear
                                                                 begin(weighted_packed_paths) + 1,
                                                                 alternative_paths_last);
 
-    alternative_paths_last = filterPackedPathsByCellSharing(begin(weighted_packed_paths), //
-                                                            end(weighted_packed_paths),   //
-                                                            partition);                   //
+    alternative_paths_last = filterPackedPathsByCellSharing(
+        begin(weighted_packed_paths), alternative_paths_last, partition);
 
     BOOST_ASSERT(weighted_packed_paths.size() >= 1);
 

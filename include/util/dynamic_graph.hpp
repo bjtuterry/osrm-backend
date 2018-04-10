@@ -6,8 +6,6 @@
 #include "util/permutation.hpp"
 #include "util/typedefs.hpp"
 
-#include "storage/io_fwd.hpp"
-
 #include <boost/assert.hpp>
 
 #include <cstdint>
@@ -22,15 +20,25 @@ namespace osrm
 {
 namespace util
 {
-template <typename EdgeDataT> class DynamicGraph;
-
-namespace serialization
+namespace detail
 {
-template <typename EdgeDataT, bool UseSharedMemory>
-void read(storage::io::FileReader &reader, DynamicGraph<EdgeDataT> &graph);
+// These types need to live outside of DynamicGraph
+// to be not dependable. We need this for transforming graphs
+// with different data.
 
-template <typename EdgeDataT, bool UseSharedMemory>
-void write(storage::io::FileWriter &writer, const DynamicGraph<EdgeDataT> &graph);
+template <typename EdgeIterator> struct DynamicNode
+{
+    // index of the first edge
+    EdgeIterator first_edge;
+    // amount of edges
+    unsigned edges;
+};
+
+template <typename NodeIterator, typename EdgeDataT> struct DynamicEdge
+{
+    NodeIterator target;
+    EdgeDataT data;
+};
 }
 
 template <typename EdgeDataT> class DynamicGraph
@@ -40,6 +48,11 @@ template <typename EdgeDataT> class DynamicGraph
     using NodeIterator = std::uint32_t;
     using EdgeIterator = std::uint32_t;
     using EdgeRange = range<EdgeIterator>;
+
+    using Node = detail::DynamicNode<EdgeIterator>;
+    using Edge = detail::DynamicEdge<NodeIterator, EdgeDataT>;
+
+    template <typename E> friend class DynamicGraph;
 
     class InputEdge
     {
@@ -66,6 +79,8 @@ template <typename EdgeDataT> class DynamicGraph
         }
     };
 
+    DynamicGraph() : DynamicGraph(0) {}
+
     // Constructs an empty graph with a given number of nodes.
     explicit DynamicGraph(NodeIterator nodes) : number_of_nodes(nodes), number_of_edges(0)
     {
@@ -87,7 +102,7 @@ template <typename EdgeDataT> class DynamicGraph
 
         number_of_nodes = nodes;
         number_of_edges = static_cast<EdgeIterator>(graph.size());
-        node_array.resize(number_of_nodes + 1);
+        node_array.resize(number_of_nodes);
         EdgeIterator edge = 0;
         EdgeIterator position = 0;
         for (const auto node : irange(0u, number_of_nodes))
@@ -101,7 +116,6 @@ template <typename EdgeDataT> class DynamicGraph
             node_array[node].edges = edge - last_edge;
             position += node_array[node].edges;
         }
-        node_array.back().first_edge = position;
         edge_list.reserve(static_cast<std::size_t>(edge_list.size() * 1.1));
         edge_list.resize(position);
         edge = 0;
@@ -116,6 +130,28 @@ template <typename EdgeDataT> class DynamicGraph
                 ++edge;
             }
         }
+
+        BOOST_ASSERT(node_array.size() == number_of_nodes);
+    }
+
+    // Copy&move for the same data
+    //
+
+    DynamicGraph(const DynamicGraph &other)
+    {
+        number_of_nodes = other.number_of_nodes;
+        // atomics can't be moved this is why we need an own constructor
+        number_of_edges = static_cast<std::uint32_t>(other.number_of_edges);
+
+        node_array = other.node_array;
+        edge_list = other.edge_list;
+    }
+
+    DynamicGraph &operator=(const DynamicGraph &other)
+    {
+        auto copy_other = other;
+        *this = std::move(other);
+        return *this;
     }
 
     DynamicGraph(DynamicGraph &&other)
@@ -140,9 +176,46 @@ template <typename EdgeDataT> class DynamicGraph
         return *this;
     }
 
+    // Removes all edges to and from nodes for which filter(node_id) returns false
+    template <typename Pred> auto Filter(Pred filter) const &
+    {
+        BOOST_ASSERT(node_array.size() == number_of_nodes);
+
+        DynamicGraph other;
+
+        other.number_of_nodes = number_of_nodes;
+        other.number_of_edges = static_cast<std::uint32_t>(number_of_edges);
+        other.edge_list.reserve(edge_list.size());
+        other.node_array.resize(node_array.size());
+
+        NodeID node_id = 0;
+        std::transform(
+            node_array.begin(), node_array.end(), other.node_array.begin(), [&](const Node &node) {
+                const EdgeIterator first_edge = other.edge_list.size();
+
+                BOOST_ASSERT(node_id < number_of_nodes);
+                if (filter(node_id++))
+                {
+                    std::copy_if(edge_list.begin() + node.first_edge,
+                                 edge_list.begin() + node.first_edge + node.edges,
+                                 std::back_inserter(other.edge_list),
+                                 [&](const auto &edge) { return filter(edge.target); });
+                    const unsigned num_edges = other.edge_list.size() - first_edge;
+                    return Node{first_edge, num_edges};
+                }
+                else
+                {
+                    return Node{first_edge, 0};
+                }
+            });
+
+        return other;
+    }
+
     unsigned GetNumberOfNodes() const { return number_of_nodes; }
 
     unsigned GetNumberOfEdges() const { return number_of_edges; }
+    auto GetEdgeCapacity() const { return edge_list.size(); }
 
     unsigned GetOutDegree(const NodeIterator n) const { return node_array[n].edges; }
 
@@ -335,7 +408,7 @@ template <typename EdgeDataT> class DynamicGraph
     void Renumber(const std::vector<NodeID> &old_to_new_node)
     {
         // permutate everything but the sentinel
-        util::inplacePermutation(node_array.begin(), std::prev(node_array.end()), old_to_new_node);
+        util::inplacePermutation(node_array.begin(), node_array.end(), old_to_new_node);
 
         // Build up edge permutation
         auto new_edge_index = 0;
@@ -347,19 +420,28 @@ template <typename EdgeDataT> class DynamicGraph
             for (auto edge : GetAdjacentEdgeRange(node))
             {
                 edge_list[edge].target = old_to_new_node[edge_list[edge].target];
-                old_to_new_edge[edge] = new_edge_index++;
-            }
-            // and all adjacent empty edges
-            for (auto edge = EndEdges(node); edge < number_of_edges && isDummy(edge); edge++)
-            {
+                BOOST_ASSERT(edge_list[edge].target != SPECIAL_NODEID);
                 old_to_new_edge[edge] = new_edge_index++;
             }
             node_array[node].first_edge = new_first_edge;
         }
+        auto number_of_valid_edges = new_edge_index;
+
+        // move all dummy edges to the end of the renumbered range
+        for (auto edge : util::irange<NodeID>(0, edge_list.size()))
+        {
+            if (old_to_new_edge[edge] == SPECIAL_EDGEID)
+            {
+                BOOST_ASSERT(isDummy(edge));
+                old_to_new_edge[edge] = new_edge_index++;
+            }
+        }
         BOOST_ASSERT(std::find(old_to_new_edge.begin(), old_to_new_edge.end(), SPECIAL_EDGEID) ==
                      old_to_new_edge.end());
-
         util::inplacePermutation(edge_list.begin(), edge_list.end(), old_to_new_edge);
+        // Remove useless dummy nodes at the end
+        edge_list.resize(number_of_valid_edges);
+        number_of_edges = number_of_valid_edges;
     }
 
   protected:
@@ -372,20 +454,6 @@ template <typename EdgeDataT> class DynamicGraph
     {
         edge_list[edge].target = (std::numeric_limits<NodeIterator>::max)();
     }
-
-    struct Node
-    {
-        // index of the first edge
-        EdgeIterator first_edge;
-        // amount of edges
-        unsigned edges;
-    };
-
-    struct Edge
-    {
-        NodeIterator target;
-        EdgeDataT data;
-    };
 
     NodeIterator number_of_nodes;
     std::atomic_uint number_of_edges;

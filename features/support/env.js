@@ -27,6 +27,7 @@ module.exports = function () {
             return callback(new Error('*** '+stxxl_config+ 'does not exist'));
         }
 
+        this.DATASET_NAME = 'cucumber';
         this.PLATFORM_WINDOWS = process.platform.match(/^win.*/);
         this.DEFAULT_ENVIRONMENT = Object.assign({STXXLCFG: stxxl_config}, process.env);
         this.DEFAULT_PROFILE = 'bicycle';
@@ -43,7 +44,10 @@ module.exports = function () {
         this.TIMEZONE_NAMES = this.PLATFORM_WINDOWS ? 'win' : 'iana';
 
         this.OSRM_PORT = process.env.OSRM_PORT && parseInt(process.env.OSRM_PORT) || 5000;
-        this.HOST = 'http://127.0.0.1:' + this.OSRM_PORT;
+        this.OSRM_IP = process.env.OSRM_IP || '127.0.0.1';
+        this.HOST = `http://${this.OSRM_IP}:${this.OSRM_PORT}`;
+
+        this.OSRM_PROFILE = process.env.OSRM_PROFILE;
 
         if (this.PLATFORM_WINDOWS) {
             this.TERMSIGNAL = 9;
@@ -70,6 +74,7 @@ module.exports = function () {
         this.OSRM_CONTRACT_PATH = path.resolve(util.format('%s/%s%s', this.BIN_PATH, 'osrm-contract', this.EXE));
         this.OSRM_ROUTED_PATH = path.resolve(util.format('%s/%s%s', this.BIN_PATH, 'osrm-routed', this.EXE));
         this.LIB_OSRM_EXTRACT_PATH = util.format('%s/' + this.LIB, this.BIN_PATH, 'osrm_extract'),
+        this.LIB_OSRM_GUIDANCE_PATH = util.format('%s/' + this.LIB, this.BIN_PATH, 'osrm_guidance'),
         this.LIB_OSRM_CONTRACT_PATH = util.format('%s/' + this.LIB, this.BIN_PATH, 'osrm_contract'),
         this.LIB_OSRM_PATH = util.format('%s/' + this.LIB, this.BIN_PATH, 'osrm');
 
@@ -90,7 +95,7 @@ module.exports = function () {
     };
 
     this.verifyOSRMIsNotRunning = (callback) => {
-        tryConnect(this.OSRM_PORT, (err) => {
+        tryConnect(this.OSRM_IP, this.OSRM_PORT, (err) => {
             if (!err) return callback(new Error('*** osrm-routed is already running.'));
             else callback();
         });

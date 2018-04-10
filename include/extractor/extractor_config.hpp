@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2016, Project OSRM contributors
+Copyright (c) 2017, Project OSRM contributors
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without modification,
@@ -52,7 +52,6 @@ struct ExtractorConfig final : storage::IOConfig
                                       ".osrm.names",
                                       ".osrm.tls",
                                       ".osrm.tld",
-                                      ".osrm.timestamp",
                                       ".osrm.geometry",
                                       ".osrm.nbg_nodes",
                                       ".osrm.ebg_nodes",
@@ -67,8 +66,11 @@ struct ExtractorConfig final : storage::IOConfig
                                       ".osrm.properties",
                                       ".osrm.icd",
                                       ".osrm.cnbg",
-                                      ".osrm.cnbg_to_ebg"}),
-                                 requested_num_threads(0)
+                                      ".osrm.cnbg_to_ebg",
+                                      ".osrm.maneuver_overrides"}),
+                                 requested_num_threads(0),
+                                 parse_conditionals(false),
+                                 use_locations_cache(true)
     {
     }
 
@@ -79,6 +81,7 @@ struct ExtractorConfig final : storage::IOConfig
 
     boost::filesystem::path input_path;
     boost::filesystem::path profile_path;
+    std::vector<boost::filesystem::path> location_dependent_data_paths;
 
     unsigned requested_num_threads;
     unsigned small_component_size;
@@ -87,6 +90,7 @@ struct ExtractorConfig final : storage::IOConfig
 
     bool use_metadata;
     bool parse_conditionals;
+    bool use_locations_cache;
 };
 }
 }

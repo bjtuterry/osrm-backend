@@ -7,9 +7,10 @@
 
 enum LogLevel
 {
-    logINFO,
-    logWARNING,
+    logNONE,
     logERROR,
+    logWARNING,
+    logINFO,
     logDEBUG
 };
 
@@ -27,14 +28,20 @@ class LogPolicy
 
     bool IsMute() const;
 
+    LogLevel GetLevel() const;
+    void SetLevel(LogLevel level);
+    void SetLevel(std::string const &level);
+
     static LogPolicy &GetInstance();
+    static std::string GetLevels();
 
     LogPolicy(const LogPolicy &) = delete;
     LogPolicy &operator=(const LogPolicy &) = delete;
 
   private:
-    LogPolicy() : m_is_mute(true) {}
+    LogPolicy() : m_is_mute(true), m_level(logINFO) {}
     std::atomic<bool> m_is_mute;
+    LogLevel m_level;
 };
 
 class Log
@@ -46,10 +53,40 @@ class Log
     virtual ~Log();
     std::mutex &get_mutex();
 
-    template <typename T> inline std::ostream &operator<<(const T &data) { return stream << data; }
+    template <typename T> inline Log &operator<<(const T &data)
+    {
+        const auto &policy = LogPolicy::GetInstance();
+        if (!policy.IsMute() && level <= policy.GetLevel())
+        {
+            stream << data;
+        }
+        return *this;
+    }
+
+    template <typename T> inline Log &operator<<(const std::atomic<T> &data)
+    {
+        const auto &policy = LogPolicy::GetInstance();
+        if (!policy.IsMute() && level <= policy.GetLevel())
+        {
+            stream << T(data);
+        }
+        return *this;
+    }
+
+    typedef std::ostream &(manip)(std::ostream &);
+
+    inline Log &operator<<(manip &m)
+    {
+        const auto &policy = LogPolicy::GetInstance();
+        if (!policy.IsMute() && level <= policy.GetLevel())
+        {
+            stream << m;
+        }
+        return *this;
+    }
 
   protected:
-    LogLevel level;
+    const LogLevel level;
     std::ostringstream buffer;
     std::ostream &stream;
 };

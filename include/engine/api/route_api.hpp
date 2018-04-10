@@ -1,6 +1,7 @@
 #ifndef ENGINE_API_ROUTE_HPP
 #define ENGINE_API_ROUTE_HPP
 
+#include "extractor/maneuver_override.hpp"
 #include "engine/api/base_api.hpp"
 #include "engine/api/json_factory.hpp"
 #include "engine/api/route_parameters.hpp"
@@ -18,6 +19,8 @@
 #include "engine/guidance/verbosity_reduction.hpp"
 
 #include "engine/internal_route_result.hpp"
+
+#include "guidance/turn_instruction.hpp"
 
 #include "util/coordinate.hpp"
 #include "util/integer_range.hpp"
@@ -88,11 +91,12 @@ class RouteAPI : public BaseAPI
     {
         util::json::Array annotations_store;
         annotations_store.values.reserve(leg.annotations.size());
-        std::for_each(leg.annotations.begin(),
-                      leg.annotations.end(),
-                      [Get, &annotations_store](const auto &step) {
-                          annotations_store.values.push_back(Get(step));
-                      });
+
+        for (const auto &step : leg.annotations)
+        {
+            annotations_store.values.push_back(Get(step));
+        }
+
         return annotations_store;
     }
 
@@ -129,6 +133,7 @@ class RouteAPI : public BaseAPI
                                              reversed_target,
                                              parameters.steps);
 
+            util::Log(logDEBUG) << "Assembling steps " << std::endl;
             if (parameters.steps)
             {
                 auto steps = guidance::assembleSteps(BaseAPI::facade,
@@ -138,6 +143,13 @@ class RouteAPI : public BaseAPI
                                                      phantoms.target_phantom,
                                                      reversed_source,
                                                      reversed_target);
+
+                // Apply maneuver overrides before any other post
+                // processing is performed
+                guidance::applyOverrides(BaseAPI::facade, steps, leg_geometry);
+
+                // Collapse segregated steps before others
+                steps = guidance::collapseSegregatedTurnInstructions(std::move(steps));
 
                 /* Perform step-based post-processing.
                  *
@@ -167,12 +179,12 @@ class RouteAPI : public BaseAPI
                  * the overall response consistent.
                  *
                  * ⚠ CAUTION: order of post-processing steps is important
-                 *    - postProcess must be called before collapseTurnInstructions that expects
-                 *      post-processed roundabouts without Exit instructions
+                 *    - handleRoundabouts must be called before collapseTurnInstructions that
+                 *      expects post-processed roundabouts
                  */
 
                 guidance::trimShortSegments(steps, leg_geometry);
-                leg.steps = guidance::postProcess(std::move(steps));
+                leg.steps = guidance::handleRoundabouts(std::move(steps));
                 leg.steps = guidance::collapseTurnInstructions(std::move(leg.steps));
                 leg.steps = guidance::anticipateLaneChange(std::move(leg.steps));
                 leg.steps = guidance::buildIntersections(std::move(leg.steps));
@@ -202,11 +214,15 @@ class RouteAPI : public BaseAPI
         }
 
         std::vector<util::json::Value> step_geometries;
+        const auto total_step_count =
+            std::accumulate(legs.begin(), legs.end(), 0, [](const auto &v, const auto &leg) {
+                return v + leg.steps.size();
+            });
+        step_geometries.reserve(total_step_count);
+
         for (const auto idx : util::irange<std::size_t>(0UL, legs.size()))
         {
             auto &leg_geometry = leg_geometries[idx];
-
-            step_geometries.reserve(step_geometries.size() + legs[idx].steps.size());
 
             std::transform(
                 legs[idx].steps.begin(),
@@ -255,10 +271,19 @@ class RouteAPI : public BaseAPI
                 // AnnotationsType uses bit flags, & operator checks if a property is set
                 if (parameters.annotations_type & RouteParameters::AnnotationsType::Speed)
                 {
+                    double prev_speed = 0;
                     annotation.values["speed"] = GetAnnotations(
-                        leg_geometry, [](const guidance::LegGeometry::Annotation &anno) {
-                            auto val = std::round(anno.distance / anno.duration * 10.) / 10.;
-                            return util::json::clamp_float(val);
+                        leg_geometry, [&prev_speed](const guidance::LegGeometry::Annotation &anno) {
+                            if (anno.duration < std::numeric_limits<double>::min())
+                            {
+                                return prev_speed;
+                            }
+                            else
+                            {
+                                auto speed = std::round(anno.distance / anno.duration * 10.) / 10.;
+                                prev_speed = speed;
+                                return util::json::clamp_float(speed);
+                            }
                         });
                 }
 
@@ -293,12 +318,28 @@ class RouteAPI : public BaseAPI
                 {
                     util::json::Array nodes;
                     nodes.values.reserve(leg_geometry.osm_node_ids.size());
-                    std::for_each(leg_geometry.osm_node_ids.begin(),
-                                  leg_geometry.osm_node_ids.end(),
-                                  [this, &nodes](const OSMNodeID &node_id) {
-                                      nodes.values.push_back(static_cast<std::uint64_t>(node_id));
-                                  });
+                    for (const auto node_id : leg_geometry.osm_node_ids)
+                    {
+                        nodes.values.push_back(static_cast<std::uint64_t>(node_id));
+                    }
                     annotation.values["nodes"] = std::move(nodes);
+                }
+                // Add any supporting metadata, if needed
+                if (requested_annotations & RouteParameters::AnnotationsType::Datasources)
+                {
+                    const auto MAX_DATASOURCE_ID = 255u;
+                    util::json::Object metadata;
+                    util::json::Array datasource_names;
+                    for (auto i = 0u; i < MAX_DATASOURCE_ID; i++)
+                    {
+                        const auto name = facade.GetDatasourceName(i);
+                        // Length of 0 indicates the first empty name, so we can stop here
+                        if (name.size() == 0)
+                            break;
+                        datasource_names.values.push_back(std::string(facade.GetDatasourceName(i)));
+                    }
+                    metadata.values["datasource_names"] = datasource_names;
+                    annotation.values["metadata"] = metadata;
                 }
 
                 annotations.push_back(std::move(annotation));

@@ -1,3 +1,5 @@
+#include "extractor/travel_mode.hpp"
+
 #include "engine/guidance/assemble_geometry.hpp"
 #include "engine/guidance/assemble_leg.hpp"
 #include "engine/guidance/assemble_overview.hpp"
@@ -12,7 +14,8 @@ BOOST_AUTO_TEST_SUITE(guidance_assembly)
 
 BOOST_AUTO_TEST_CASE(trim_short_segments)
 {
-    using namespace osrm::extractor::guidance;
+    using namespace osrm::extractor;
+    using namespace osrm::guidance;
     using namespace osrm::engine::guidance;
     using namespace osrm::engine;
     using namespace osrm::util;
@@ -35,7 +38,9 @@ BOOST_AUTO_TEST_CASE(trim_short_segments)
                                            {}};
 
     // Check that duplicated coordinate in the end is removed
-    std::vector<RouteStep> steps = {{324,
+    std::vector<RouteStep> steps = {{0,
+                                     324,
+                                     false,
                                      "Central Park West",
                                      "",
                                      "",
@@ -55,8 +60,11 @@ BOOST_AUTO_TEST_CASE(trim_short_segments)
                                       0},
                                      0,
                                      3,
-                                     {intersection1}},
-                                    {324,
+                                     {intersection1},
+                                     false},
+                                    {0,
+                                     324,
+                                     false,
                                      "Central Park West",
                                      "",
                                      "",
@@ -76,7 +84,8 @@ BOOST_AUTO_TEST_CASE(trim_short_segments)
                                       0},
                                      2,
                                      3,
-                                     {intersection2}}};
+                                     {intersection2},
+                                     false}};
 
     LegGeometry geometry;
     geometry.locations = {{FloatLongitude{-73.981492}, FloatLatitude{40.768258}},

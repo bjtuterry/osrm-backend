@@ -7,10 +7,6 @@ git:
 sudo: required
 dist: trusty
 
-node_js:
-    - "4"
-    - "6"
-
 notifications:
   email: false
 
@@ -63,43 +59,53 @@ matrix:
         - ./scripts/check_taginfo.py taginfo.json profiles/car.lua
         - ${MASON} install clang-format 3.8.1
         - PATH=$(${MASON} prefix clang-format 3.8.1)/bin:${PATH} ./scripts/format.sh && ./scripts/error_on_dirty.sh
+        - node ./scripts/validate_changelog.js
         # See issue 4043
         #- npm run docs && ./scripts/error_on_dirty.sh
       after_success:
 
     - os: linux
-      compiler: "gcc-6-debug-cov"
-      addons: &gcc6
+      compiler: "gcc-7-debug-cov"
+      addons: &gcc7
         apt:
           sources: ['ubuntu-toolchain-r-test']
-          packages: ['g++-6', 'libbz2-dev', 'libxml2-dev', 'libzip-dev', 'lua5.1', 'liblua5.1-0-dev', 'libtbb-dev', 'libgdal-dev', 'libboost-all-dev']
-      env: CCOMPILER='gcc-6' CXXCOMPILER='g++-6' BUILD_TYPE='Debug' ENABLE_COVERAGE=ON CUCUMBER_TIMEOUT=20000
+          packages: ['g++-7', 'libbz2-dev', 'libxml2-dev', 'libzip-dev', 'liblua5.2-dev', 'libtbb-dev', 'libboost-all-dev', 'lcov']
+      env: CCOMPILER='gcc-7' CXXCOMPILER='g++-7' BUILD_TYPE='Debug' ENABLE_COVERAGE=ON CUCUMBER_TIMEOUT=20000
+      before_script:
+        - cd ${TRAVIS_BUILD_DIR}
+        - lcov --directory . --zerocounters # clean cached da files
       after_success:
-        - bash <(curl -s https://codecov.io/bash)
+        # Creating report
+        - cd ${TRAVIS_BUILD_DIR}
+        - lcov --directory . --capture --output-file coverage.info # capture coverage info
+        - lcov --remove coverage.info '/usr/*' --output-file coverage.info # filter out system
+        - lcov --list coverage.info #debug info
+        # Uploading report to CodeCov
+        - bash <(curl -s https://codecov.io/bash) || echo "Codecov did not collect coverage reports"
 
     - os: linux
-      compiler: "gcc-6-debug-asan"
-      addons: &gcc6
+      compiler: "gcc-7-debug-asan"
+      addons: &gcc7
         apt:
           sources: ['ubuntu-toolchain-r-test']
-          packages: ['g++-6', 'libbz2-dev', 'libxml2-dev', 'libzip-dev', 'lua5.1', 'liblua5.1-0-dev', 'libtbb-dev', 'libgdal-dev', 'libboost-all-dev']
-      env: CCOMPILER='gcc-6' CXXCOMPILER='g++-6' BUILD_TYPE='Debug' TARGET_ARCH='x86_64-asan' ENABLE_SANITIZER=ON CUCUMBER_TIMEOUT=20000
+          packages: ['g++-7', 'libbz2-dev', 'libxml2-dev', 'libzip-dev', 'liblua5.2-dev', 'libtbb-dev', 'libboost-all-dev']
+      env: CCOMPILER='gcc-7' CXXCOMPILER='g++-7' BUILD_TYPE='Debug' TARGET_ARCH='x86_64-asan' ENABLE_SANITIZER=ON CUCUMBER_TIMEOUT=20000 LSAN_OPTIONS="suppressions=$TRAVIS_BUILD_DIR/scripts/travis/leaksanitizer.conf"
 
     - os: linux
-      compiler: "clang-4.0-debug"
-      addons: &clang40
+      compiler: "clang-5.0-debug"
+      addons: &clang50
         apt:
           sources: ['ubuntu-toolchain-r-test']
-          packages: ['libstdc++-5-dev', 'libbz2-dev', 'libxml2-dev', 'libzip-dev', 'lua5.1', 'liblua5.1-0-dev', 'libtbb-dev', 'libgdal-dev', 'libboost-all-dev']
-      env: CLANG_VERSION='4.0.0' BUILD_TYPE='Debug' CUCUMBER_TIMEOUT=60000
+          packages: ['libstdc++-5-dev', 'libbz2-dev', 'libxml2-dev', 'libzip-dev', 'liblua5.2-dev', 'libtbb-dev', 'libboost-all-dev']
+      env: CLANG_VERSION='5.0.0' BUILD_TYPE='Debug' CUCUMBER_TIMEOUT=60000
 
     - os: linux
       compiler: "mason-linux-debug-asan"
       addons:
         apt:
           sources: ['ubuntu-toolchain-r-test']
-          packages: ['libstdc++-5-dev']
-      env: CLANG_VERSION='4.0.0' BUILD_TYPE='Release' ENABLE_MASON=ON ENABLE_SANITIZER=ON
+          packages: ['libstdc++-4.9-dev']
+      env: CLANG_VERSION='5.0.0' BUILD_TYPE='Release' ENABLE_MASON=ON ENABLE_SANITIZER=ON LSAN_OPTIONS="suppressions=$TRAVIS_BUILD_DIR/scripts/travis/leaksanitizer.conf"
 
     # Release Builds
     - os: linux
@@ -107,73 +113,71 @@ matrix:
       addons:
         apt:
           sources: ['ubuntu-toolchain-r-test']
-          packages: ['libstdc++-5-dev']
-      env: CLANG_VERSION='4.0.0' BUILD_TYPE='Release' ENABLE_MASON=ON RUN_CLANG_FORMAT=ON ENABLE_LTO=ON
+          packages: ['libstdc++-4.9-dev']
+      env: CLANG_VERSION='5.0.0' BUILD_TYPE='Release' ENABLE_MASON=ON RUN_CLANG_FORMAT=ON ENABLE_LTO=ON
 
     - os: linux
-      compiler: "gcc-6-release"
-      addons: &gcc6
+      compiler: "gcc-7-release"
+      addons: &gcc7
         apt:
           sources: ['ubuntu-toolchain-r-test']
-          packages: ['g++-6', 'libbz2-dev', 'libxml2-dev', 'libzip-dev', 'lua5.1', 'liblua5.1-0-dev', 'libtbb-dev', 'libgdal-dev', 'libboost-all-dev']
-      env: CCOMPILER='gcc-6' CXXCOMPILER='g++-6' BUILD_TYPE='Release'
+          packages: ['g++-7', 'libbz2-dev', 'libxml2-dev', 'libzip-dev', 'liblua5.2-dev', 'libtbb-dev', 'libboost-all-dev']
+      env: CCOMPILER='gcc-7' CXXCOMPILER='g++-7' BUILD_TYPE='Release'
 
     - os: linux
-      compiler: "gcc-6-release-i686"
+      compiler: "gcc-7-release-i686"
       env: >
-        TARGET_ARCH='i686' CCOMPILER='gcc-6' CXXCOMPILER='g++-6' BUILD_TYPE='Release'
+        TARGET_ARCH='i686' CCOMPILER='gcc-7' CXXCOMPILER='g++-7' BUILD_TYPE='Release'
         CFLAGS='-m32 -msse2 -mfpmath=sse' CXXFLAGS='-m32 -msse2 -mfpmath=sse'
 
     - os: linux
-      compiler: "gcc-6-stxxl"
-      addons: &gcc6
+      compiler: "gcc-7-stxxl"
+      addons: &gcc7
         apt:
           sources: ['ubuntu-toolchain-r-test']
-          packages: ['g++-6', 'libbz2-dev', 'libstxxl-dev', 'libxml2-dev', 'libzip-dev', 'lua5.1', 'liblua5.1-0-dev', 'libtbb-dev', 'libgdal-dev', 'libboost-all-dev']
-      env: CCOMPILER='gcc-6' CXXCOMPILER='g++-6' BUILD_TYPE='Release' ENABLE_STXXL=On
+          packages: ['g++-7', 'libbz2-dev', 'libstxxl-dev', 'libxml2-dev', 'libzip-dev', 'liblua5.2-dev', 'libtbb-dev', 'libboost-all-dev']
+      env: CCOMPILER='gcc-7' CXXCOMPILER='g++-7' BUILD_TYPE='Release' ENABLE_STXXL=On
 
     - os: linux
-      compiler: "gcc-4.9-release"
+      compiler: "gcc-5-release"
       addons: &gcc49
         apt:
           sources: ['ubuntu-toolchain-r-test']
-          packages: ['g++-4.9', 'libbz2-dev', 'libxml2-dev', 'libzip-dev', 'lua5.1', 'liblua5.1-0-dev', 'libtbb-dev', 'libgdal-dev', 'libluabind-dev', 'libboost-all-dev', 'ccache']
-      env: CCOMPILER='gcc-4.9' CXXCOMPILER='g++-4.9' BUILD_TYPE='Release'
+          packages: ['g++-5', 'libbz2-dev', 'libxml2-dev', 'libzip-dev', 'liblua5.2-dev', 'libtbb-dev', 'libboost-all-dev', 'ccache']
+      env: CCOMPILER='gcc-5' CXXCOMPILER='g++-5' BUILD_TYPE='Release'
+
+    - os: linux
+      compiler: "gcc-6-release"
+      addons: &gcc49
+        apt:
+          sources: ['ubuntu-toolchain-r-test']
+          packages: ['g++-6', 'libbz2-dev', 'libxml2-dev', 'libzip-dev', 'liblua5.2-dev', 'libtbb-dev', 'libboost-all-dev', 'ccache']
+      env: CCOMPILER='gcc-6' CXXCOMPILER='g++-6' BUILD_TYPE='Release'
 
     - os: osx
-      osx_image: xcode8.2
-      compiler: "mason-osx-release"
+      osx_image: xcode9.2
+      compiler: "mason-osx-release-node-8"
       # we use the xcode provides clang and don't install our own
-      env: ENABLE_MASON=ON BUILD_TYPE='Release' CUCUMBER_TIMEOUT=60000 CCOMPILER='clang' CXXCOMPILER='clang++' ENABLE_ASSERTIONS=ON ENABLE_LTO=ON
+      env: ENABLE_MASON=ON BUILD_TYPE='Release' CUCUMBER_TIMEOUT=60000 CCOMPILER='clang' CXXCOMPILER='clang++' ENABLE_ASSERTIONS=ON ENABLE_LTO=ON NODE="8"
       after_success:
         - ./scripts/travis/publish.sh
 
-      # Disabled because of CI slowness
-      #- os: linux
-      #- compiler: clang
-      #- addons: &clang40
-      #-   apt:
-      #-     sources: ['llvm-toolchain-trusty-4.0', 'ubuntu-toolchain-r-test']
-      #-     packages: ['clang-4.0', 'libbz2-dev', 'libxml2-dev', 'libzip-dev', 'lua5.1', 'liblua5.1-0-dev', 'libtbb-dev', 'libgdal-dev', 'libboost-all-dev']
-      #- env: CCOMPILER='clang-4.0' CXXCOMPILER='clang++-4.0' BUILD_TYPE='Release'
+    - os: osx
+      osx_image: xcode9.2
+      compiler: "mason-osx-release-node-4"
+      # we use the xcode provides clang and don't install our own
+      env: ENABLE_MASON=ON BUILD_TYPE='Release' CUCUMBER_TIMEOUT=60000 CCOMPILER='clang' CXXCOMPILER='clang++' ENABLE_ASSERTIONS=ON ENABLE_LTO=ON NODE="4"
+      after_success:
+        - ./scripts/travis/publish.sh
 
     # Shared Library
     - os: linux
-      compiler: "gcc-6-release-shared"
-      addons: &gcc6
+      compiler: "gcc-7-release-shared"
+      addons: &gcc7
         apt:
           sources: ['ubuntu-toolchain-r-test']
-          packages: ['g++-6', 'libbz2-dev', 'libxml2-dev', 'libzip-dev', 'lua5.1', 'liblua5.1-0-dev', 'libtbb-dev', 'libgdal-dev', 'libboost-all-dev']
-      env: CCOMPILER='gcc-6' CXXCOMPILER='g++-6' BUILD_TYPE='Release' BUILD_SHARED_LIBS=ON
-
-      # Disabled because CI slowness
-      #- os: linux
-      #- compiler: clang
-      #- addons: &clang40
-      #-   apt:
-      #-     sources: ['llvm-toolchain-trusty-4.0', 'ubuntu-toolchain-r-test']
-      #-     packages: ['clang-4.0', 'libbz2-dev', 'libxml2-dev', 'libzip-dev', 'lua5.1', 'liblua5.1-0-dev', 'libtbb-dev', 'libgdal-dev', 'libboost-all-dev']
-      #- env: CCOMPILER='clang-4.0' CXXCOMPILER='clang++-4.0' BUILD_TYPE='Release' BUILD_SHARED_LIBS=ON
+          packages: ['g++-7', 'libbz2-dev', 'libxml2-dev', 'libzip-dev', 'liblua5.2-dev', 'libtbb-dev', 'libboost-all-dev']
+      env: CCOMPILER='gcc-7' CXXCOMPILER='g++-7' BUILD_TYPE='Release' BUILD_SHARED_LIBS=ON
 
     # Node build jobs. These skip running the tests.
     - os: linux
@@ -182,8 +186,8 @@ matrix:
       addons:
         apt:
           sources: ['ubuntu-toolchain-r-test']
-          packages: ['libstdc++-5-dev']
-      env: CLANG_VERSION='4.0.0' BUILD_TYPE='Release' ENABLE_MASON=ON ENABLE_LTO=ON JOBS=3
+          packages: ['libstdc++-4.9-dev']
+      env: CLANG_VERSION='5.0.0' BUILD_TYPE='Release' ENABLE_MASON=ON ENABLE_LTO=ON JOBS=3 NODE="4"
       install:
         - pushd ${OSRM_BUILD_DIR}
         - |
@@ -191,7 +195,8 @@ matrix:
               -DENABLE_MASON=${ENABLE_MASON:-OFF} \
               -DENABLE_NODE_BINDINGS=${ENABLE_NODE_BINDINGS:-OFF} \
               -DENABLE_CCACHE=ON \
-              -DCMAKE_INSTALL_PREFIX=${OSRM_INSTALL_DIR}
+              -DCMAKE_INSTALL_PREFIX=${OSRM_INSTALL_DIR} \
+              -DENABLE_GLIBC_WORKAROUND=ON
         - make --jobs=${JOBS}
         - popd
       script:
@@ -201,12 +206,12 @@ matrix:
 
     - os: linux
       sudo: false
-      compiler: "node-4-mason-linux-release"
+      compiler: "node-4-mason-linux-debug"
       addons:
         apt:
           sources: ['ubuntu-toolchain-r-test']
-          packages: ['libstdc++-5-dev']
-      env: CLANG_VERSION='4.0.0' BUILD_TYPE='Debug' ENABLE_MASON=ON ENABLE_LTO=ON JOBS=3
+          packages: ['libstdc++-4.9-dev']
+      env: CLANG_VERSION='5.0.0' BUILD_TYPE='Debug' ENABLE_MASON=ON ENABLE_LTO=ON JOBS=3 NODE="4"
       install:
         - pushd ${OSRM_BUILD_DIR}
         - |
@@ -214,7 +219,8 @@ matrix:
               -DENABLE_MASON=${ENABLE_MASON:-OFF} \
               -DENABLE_NODE_BINDINGS=${ENABLE_NODE_BINDINGS:-OFF} \
               -DENABLE_CCACHE=ON \
-              -DCMAKE_INSTALL_PREFIX=${OSRM_INSTALL_DIR}
+              -DCMAKE_INSTALL_PREFIX=${OSRM_INSTALL_DIR} \
+              -DENABLE_GLIBC_WORKAROUND=ON
         - make --jobs=${JOBS}
         - popd
       script:
@@ -224,12 +230,12 @@ matrix:
 
     - os: linux
       sudo: false
-      compiler: "node-6-mason-linux-release"
+      compiler: "node-8-mason-linux-release"
       addons:
         apt:
           sources: ['ubuntu-toolchain-r-test']
-          packages: ['libstdc++-5-dev']
-      env: CLANG_VERSION='4.0.0' BUILD_TYPE='Release' ENABLE_MASON=ON ENABLE_LTO=ON JOBS=3 NODE="6"
+          packages: ['libstdc++-4.9-dev']
+      env: CLANG_VERSION='5.0.0' BUILD_TYPE='Release' ENABLE_MASON=ON ENABLE_LTO=ON JOBS=3 NODE="8"
       install:
         - pushd ${OSRM_BUILD_DIR}
         - |
@@ -237,7 +243,8 @@ matrix:
               -DENABLE_MASON=${ENABLE_MASON:-OFF} \
               -DENABLE_NODE_BINDINGS=${ENABLE_NODE_BINDINGS:-OFF} \
               -DENABLE_CCACHE=ON \
-              -DCMAKE_INSTALL_PREFIX=${OSRM_INSTALL_DIR}
+              -DCMAKE_INSTALL_PREFIX=${OSRM_INSTALL_DIR} \
+              -DENABLE_GLIBC_WORKAROUND=ON
         - make --jobs=${JOBS}
         - popd
       script:
@@ -247,12 +254,12 @@ matrix:
 
     - os: linux
       sudo: false
-      compiler: "node-6-mason-linux-release"
+      compiler: "node-8-mason-linux-debug"
       addons:
         apt:
           sources: ['ubuntu-toolchain-r-test']
-          packages: ['libstdc++-5-dev']
-      env: CLANG_VERSION='4.0.0' BUILD_TYPE='Debug' ENABLE_MASON=ON ENABLE_LTO=ON JOBS=3 NODE="6"
+          packages: ['libstdc++-4.9-dev']
+      env: CLANG_VERSION='5.0.0' BUILD_TYPE='Debug' ENABLE_MASON=ON ENABLE_LTO=ON JOBS=3 NODE="8"
       install:
         - pushd ${OSRM_BUILD_DIR}
         - |
@@ -260,7 +267,8 @@ matrix:
               -DENABLE_MASON=${ENABLE_MASON:-OFF} \
               -DENABLE_NODE_BINDINGS=${ENABLE_NODE_BINDINGS:-OFF} \
               -DENABLE_CCACHE=ON \
-              -DCMAKE_INSTALL_PREFIX=${OSRM_INSTALL_DIR}
+              -DCMAKE_INSTALL_PREFIX=${OSRM_INSTALL_DIR} \
+              -DENABLE_GLIBC_WORKAROUND=ON
         - make --jobs=${JOBS}
         - popd
       script:
@@ -334,7 +342,8 @@ install:
              -DENABLE_STXXL=${ENABLE_STXXL:-OFF} \
              -DBUILD_TOOLS=ON \
              -DENABLE_CCACHE=ON \
-             -DCMAKE_INSTALL_PREFIX=${OSRM_INSTALL_DIR}
+             -DCMAKE_INSTALL_PREFIX=${OSRM_INSTALL_DIR} \
+             -DENABLE_GLIBC_WORKAROUND=${ENABLE_GLIBC_WORKAROUND:-OFF}
   - echo "travis_fold:start:MAKE"
   - make --jobs=${JOBS}
   - make tests --jobs=${JOBS}
@@ -356,15 +365,16 @@ install:
 script:
   - if [[ $TARGET_ARCH == armhf ]] ; then echo "Skip tests for $TARGET_ARCH" && exit 0 ; fi
   - make -C test/data benchmark
-  - ./example/build/osrm-example test/data/ch/monaco.osrm
+  - ./example/build/osrm-example test/data/mld/monaco.osrm
   # All tests assume to be run from the build directory
   - pushd ${OSRM_BUILD_DIR}
   - ./unit_tests/library-tests
   - ./unit_tests/extractor-tests
+  - ./unit_tests/contractor-tests
   - ./unit_tests/engine-tests
   - ./unit_tests/util-tests
   - ./unit_tests/server-tests
-  - ./unit_tests/partition-tests
+  - ./unit_tests/partitioner-tests
   - |
     if [ -z "${ENABLE_SANITIZER}" ] && [ "$TARGET_ARCH" != "i686" ]; then
       npm run nodejs-tests

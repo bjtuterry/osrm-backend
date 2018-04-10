@@ -28,13 +28,16 @@ module.exports = function() {
             let uri = feature.getUri();
 
             // setup cache for feature data
-            hash.hashOfFile(uri, (err, hash) => {
+            // if OSRM_PROFILE is set to force a specific profile, then
+             // include the profile name in the hash of the profile file
+            hash.hashOfFile(uri, this.OSRM_PROFILE, (err, hash) => {
                 if (err) return callback(err);
 
                 // shorten uri to be realtive to 'features/'
                 let featurePath = path.relative(path.resolve('./features'), uri);
                 // bicycle/bollards/{HASH}/
                 let featureID = path.join(featurePath, hash);
+
                 let featureCacheDirectory = this.getFeatureCacheDirectory(featureID);
                 let featureProcessedCacheDirectory = this.getFeatureProcessedCacheDirectory(featureCacheDirectory, this.osrmHash);
                 this.featureIDs[uri] = featureID;
@@ -112,6 +115,7 @@ module.exports = function() {
             this.OSRM_EXTRACT_PATH,
             this.OSRM_CONTRACT_PATH,
             this.LIB_OSRM_EXTRACT_PATH,
+            this.LIB_OSRM_GUIDANCE_PATH,
             this.LIB_OSRM_CONTRACT_PATH
         ];
 

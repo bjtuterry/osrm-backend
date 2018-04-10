@@ -28,11 +28,17 @@ enum class return_code : unsigned
     exit
 };
 
-return_code parseArguments(int argc, char *argv[], contractor::ContractorConfig &contractor_config)
+return_code parseArguments(int argc,
+                           char *argv[],
+                           std::string &verbosity,
+                           contractor::ContractorConfig &contractor_config)
 {
     // declare a group of options that will be allowed only on command line
     boost::program_options::options_description generic_options("Options");
-    generic_options.add_options()("version,v", "Show version")("help,h", "Show this help message");
+    generic_options.add_options()("version,v", "Show version")("help,h", "Show this help message")(
+        "verbosity,l",
+        boost::program_options::value<std::string>(&verbosity)->default_value("INFO"),
+        std::string("Log verbosity level: " + util::LogPolicy::GetLevels()).c_str());
 
     // declare a group of options that will be allowed on command line
     boost::program_options::options_description config_options("Configuration");
@@ -43,21 +49,23 @@ return_code parseArguments(int argc, char *argv[], contractor::ContractorConfig 
         "Number of threads to use")(
         "core,k",
         boost::program_options::value<double>(&contractor_config.core_factor)->default_value(1.0),
-        "Percentage of the graph (in vertices) to contract [0..1]")(
-        "segment-speed-file",
-        boost::program_options::value<std::vector<std::string>>(
-            &contractor_config.updater_config.segment_speed_lookup_paths)
-            ->composing(),
-        "Lookup files containing nodeA, nodeB, speed data to adjust edge weights")(
+        "DEPRECATED: Will always be 1.0. Percentage of the graph (in vertices) to contract "
+        "[0..1].")("segment-speed-file",
+                   boost::program_options::value<std::vector<std::string>>(
+                       &contractor_config.updater_config.segment_speed_lookup_paths)
+                       ->composing(),
+                   "Lookup files containing nodeA, nodeB, speed data to adjust edge weights")(
         "turn-penalty-file",
         boost::program_options::value<std::vector<std::string>>(
             &contractor_config.updater_config.turn_penalty_lookup_paths)
             ->composing(),
         "Lookup files containing from_, to_, via_nodes, and turn penalties to adjust turn weights")(
         "level-cache,o",
-        boost::program_options::value<bool>(&contractor_config.use_cached_priority)
+        boost::program_options::bool_switch(&contractor_config.use_cached_priority)
             ->default_value(false),
-        "Use .level file to retain the contaction level for each node from the last run.")(
+        "DEPRECATED: Will always be false. Use .level file to retain the contraction level for "
+        "each "
+        "node from the last run.")(
         "edge-weight-updates-over-factor",
         boost::program_options::value<double>(
             &contractor_config.updater_config.log_edge_updates_factor)
@@ -137,11 +145,11 @@ return_code parseArguments(int argc, char *argv[], contractor::ContractorConfig 
 
 int main(int argc, char *argv[]) try
 {
-
     util::LogPolicy::GetInstance().Unmute();
+    std::string verbosity;
     contractor::ContractorConfig contractor_config;
 
-    const return_code result = parseArguments(argc, argv, contractor_config);
+    const return_code result = parseArguments(argc, argv, verbosity, contractor_config);
 
     if (return_code::fail == result)
     {
@@ -152,6 +160,8 @@ int main(int argc, char *argv[]) try
     {
         return EXIT_SUCCESS;
     }
+
+    util::LogPolicy::GetInstance().SetLevel(verbosity);
 
     contractor_config.UseDefaultOutputNames(contractor_config.base_path);
 
@@ -176,8 +186,6 @@ int main(int argc, char *argv[]) try
 
     util::Log() << "Input file: " << contractor_config.base_path.string() << ".osrm";
     util::Log() << "Threads: " << contractor_config.requested_num_threads;
-
-    tbb::task_scheduler_init init(contractor_config.requested_num_threads);
 
     osrm::contract(contractor_config);
 

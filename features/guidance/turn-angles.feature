@@ -248,8 +248,8 @@ Feature: Simple Turns
             | bcdefghijklmnob | residential | road | 1     | yes    | roundabout |
 
        When I route I should get
-            | waypoints | route               | turns                                         | intersections                                                            |
-            | a,p       | road,road,road      | depart,roundabout turn straight exit-1,arrive | true:90;true:165 false:270 false:345,true:90 false:180 true:345;true:270 |
+            | waypoints | route          | turns                                         | intersections                                                            |
+            | a,p       | road,road,road | depart,roundabout turn straight exit-1,arrive | true:90;true:165 false:270 false:345,true:90 false:180 true:345;true:270 |
 
     Scenario: Splitting Road with many lanes
         Given the node map
@@ -274,6 +274,35 @@ Feature: Simple Turns
             | ab    | primary | road | 4     | no     |
             | bcd   | primary | road | 2     | yes    |
             | efb   | primary | road | 2     | yes    |
+
+        When I route I should get
+            | waypoints | route     | turns         |
+            | a,d       | road,road | depart,arrive |
+            | e,a       | road,road | depart,arrive |
+
+    Scenario: Splitting Road with many lanes; same as above makes sure len(turn:lanes) work as expected
+        Given the node map
+            """
+                              f - - - - - - - - - - - - - - - - - - - - e
+                             '
+                            '
+                           '
+                          '
+                         '
+            a - - - - - b
+                         '
+                          '
+                           '
+                            '
+                             '
+                              c - - - - - - - - - - - - - - - - - - - - d
+            """
+
+        And the ways
+            | nodes | highway | name | turn:lanes               | oneway |
+            | ab    | primary | road | left\|left\|right\|right | no     |
+            | bcd   | primary | road | through\|through         | yes    |
+            | efb   | primary | road | through\|through         | yes    |
 
         When I route I should get
             | waypoints | route     | turns         |
@@ -819,6 +848,7 @@ Feature: Simple Turns
             | h,a       | Heide,Perle,Perle   | depart,turn left,arrive  | true:16;true:90 true:195 true:270 true:345;true:90    |
 
     #http://www.openstreetmap.org/#map=19/52.53293/13.32956
+    # adjusted ways to reflect the case geometry for 2/3/2018
     Scenario: Curved Exit from Curved Road
         Given the node map
             """
@@ -845,16 +875,16 @@ Feature: Simple Turns
 
         And the ways
             | nodes  | name    | oneway | lanes | highway     |
-            | abcd   | Siemens | no     | 5     | secondary   |
-            | defg   | Erna    | no     | 3     | secondary   |
+            | ab     | Siemens | no     | 5     | secondary   |
+            | bcdefg | Erna    | no     | 3     | secondary   |
             | dhij   | Siemens | no     |       | residential |
 
         When I route I should get
-            | waypoints | route                   | turns                               |
-            | a,j       | Siemens,Siemens,Siemens | depart,continue slight right,arrive |
-            | a,g       | Siemens,Erna            | depart,arrive                       |
-            | g,j       | Erna,Siemens,Siemens    | depart,turn left,arrive             |
-            | g,a       | Erna,Siemens            | depart,arrive                       |
+            | waypoints | route                   | turns                           |
+            | a,j       | Siemens,Siemens,Siemens | depart,turn slight right,arrive |
+            | a,g       | Siemens,Erna            | depart,arrive                   |
+            | g,j       | Erna,Siemens,Siemens    | depart,turn left,arrive         |
+            | g,a       | Erna,Siemens            | depart,arrive                   |
 
      #http://www.openstreetmap.org/#map=19/52.51303/13.32170
      Scenario: Ernst Reuter Platz
@@ -932,12 +962,12 @@ Feature: Simple Turns
                                                             g
                                                           .
                                                         .
-                                                      .
-                                                    .
-                                                  f
-                            h                   .
-                               .              .
-                                  .         j
+                                                       .
+                                                     .
+                             h                     f
+                                                .
+                                 .            .
+                                   .        j
                                      .    .
                                         c
                                       . . .
@@ -1317,11 +1347,11 @@ Feature: Simple Turns
 
     #https://github.com/Project-OSRM/osrm-backend/pull/3469#issuecomment-270806580
     Scenario: Oszillating Lower Priority Road
-		#Given the node map
-	#		"""
-	#		a -db    c
+        #Given the node map
+    #       """
+    #       a -db    c
     #           f
-    #   	"""
+    #       """
         Given the node locations
             | node | lat                | lon                | #          |
             | a    | 1.0                | 1.0                |            |

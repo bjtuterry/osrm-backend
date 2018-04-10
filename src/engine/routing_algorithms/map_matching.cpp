@@ -46,6 +46,25 @@ unsigned getMedianSampleTime(const std::vector<unsigned> &timestamps)
     std::nth_element(first_elem, median, sample_times.end());
     return *median;
 }
+
+template <typename Algorithm>
+inline void initializeHeap(SearchEngineData<Algorithm> &engine_working_data,
+                           const DataFacade<Algorithm> &facade)
+{
+
+    const auto nodes_number = facade.GetNumberOfNodes();
+    engine_working_data.InitializeOrClearFirstThreadLocalStorage(nodes_number);
+}
+
+template <>
+inline void initializeHeap<mld::Algorithm>(SearchEngineData<mld::Algorithm> &engine_working_data,
+                                           const DataFacade<mld::Algorithm> &facade)
+{
+
+    const auto nodes_number = facade.GetNumberOfNodes();
+    const auto border_nodes_number = facade.GetMaxBorderNodeID() + 1;
+    engine_working_data.InitializeOrClearFirstThreadLocalStorage(nodes_number, border_nodes_number);
+}
 }
 
 template <typename Algorithm>
@@ -131,9 +150,7 @@ SubMatchingList mapMatching(SearchEngineData<Algorithm> &engine_working_data,
         return sub_matchings;
     }
 
-    const auto nodes_number = facade.GetNumberOfNodes();
-    engine_working_data.InitializeOrClearFirstThreadLocalStorage(nodes_number);
-
+    initializeHeap(engine_working_data, facade);
     auto &forward_heap = *engine_working_data.forward_heap_1;
     auto &reverse_heap = *engine_working_data.reverse_heap_1;
 
@@ -420,6 +437,7 @@ SubMatchingList mapMatching(SearchEngineData<Algorithm> &engine_working_data,
     return sub_matchings;
 }
 
+// CH
 template SubMatchingList
 mapMatching(SearchEngineData<ch::Algorithm> &engine_working_data,
             const DataFacade<ch::Algorithm> &facade,
@@ -429,15 +447,7 @@ mapMatching(SearchEngineData<ch::Algorithm> &engine_working_data,
             const std::vector<boost::optional<double>> &trace_gps_precision,
             const bool allow_splitting);
 
-template SubMatchingList
-mapMatching(SearchEngineData<corech::Algorithm> &engine_working_data,
-            const DataFacade<corech::Algorithm> &facade,
-            const CandidateLists &candidates_list,
-            const std::vector<util::Coordinate> &trace_coordinates,
-            const std::vector<unsigned> &trace_timestamps,
-            const std::vector<boost::optional<double>> &trace_gps_precision,
-            const bool allow_splitting);
-
+// MLD
 template SubMatchingList
 mapMatching(SearchEngineData<mld::Algorithm> &engine_working_data,
             const DataFacade<mld::Algorithm> &facade,

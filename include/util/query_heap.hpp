@@ -128,6 +128,67 @@ template <typename NodeID, typename Key> class UnorderedMapStorage
 
 template <typename NodeID,
           typename Key,
+          template <typename N, typename K> class BaseIndexStorage = UnorderedMapStorage,
+          template <typename N, typename K> class OverlayIndexStorage = ArrayStorage>
+class TwoLevelStorage
+{
+  public:
+    explicit TwoLevelStorage(std::size_t number_of_nodes, std::size_t number_of_overlay_nodes)
+        : number_of_overlay_nodes(number_of_overlay_nodes), base(number_of_nodes),
+          overlay(number_of_overlay_nodes)
+    {
+    }
+
+    Key &operator[](const NodeID node)
+    {
+        if (node < number_of_overlay_nodes)
+        {
+            return overlay[node];
+        }
+        else
+        {
+            return base[node];
+        }
+    }
+
+    Key peek_index(const NodeID node) const
+    {
+        if (node < number_of_overlay_nodes)
+        {
+            return overlay.peek_index(node);
+        }
+        else
+        {
+            return base.peek_index(node);
+        }
+    }
+
+    Key const &operator[](const NodeID node) const
+    {
+        if (node < number_of_overlay_nodes)
+        {
+            return overlay[node];
+        }
+        else
+        {
+            return base[node];
+        }
+    }
+
+    void Clear()
+    {
+        base.Clear();
+        overlay.Clear();
+    }
+
+  private:
+    const std::size_t number_of_overlay_nodes;
+    BaseIndexStorage<NodeID, Key> base;
+    OverlayIndexStorage<NodeID, Key> overlay;
+};
+
+template <typename NodeID,
+          typename Key,
           typename Weight,
           typename Data,
           typename IndexStorage = ArrayStorage<NodeID, NodeID>>
@@ -137,7 +198,10 @@ class QueryHeap
     using WeightType = Weight;
     using DataType = Data;
 
-    explicit QueryHeap(std::size_t maxID) : node_index(maxID) { Clear(); }
+    template <typename... StorageArgs> explicit QueryHeap(StorageArgs... args) : node_index(args...)
+    {
+        Clear();
+    }
 
     void Clear()
     {
@@ -152,6 +216,7 @@ class QueryHeap
 
     void Insert(NodeID node, Weight weight, const Data &data)
     {
+        BOOST_ASSERT(node < std::numeric_limits<NodeID>::max());
         const auto index = static_cast<Key>(inserted_nodes.size());
         const auto handle = heap.push(std::make_pair(weight, index));
         inserted_nodes.emplace_back(HeapNode{handle, node, weight, data});
@@ -180,7 +245,16 @@ class QueryHeap
     {
         BOOST_ASSERT(WasInserted(node));
         const Key index = node_index.peek_index(node);
-        return inserted_nodes[index].handle == HeapHandle{};
+
+        // Use end iterator as a reliable "non-existent" handle.
+        // Default-constructed handles are singular and
+        // can only be checked-compared to another singular instance.
+        // Behaviour investigated at https://lists.boost.org/boost-users/2017/08/87787.php,
+        // eventually confirmation at https://stackoverflow.com/a/45622940/151641.
+        // Corrected in https://github.com/Project-OSRM/osrm-backend/pull/4396
+        auto const end_it = const_cast<HeapContainer &>(heap).end();  // non-const iterator
+        auto const none_handle = heap.s_handle_from_iterator(end_it); // from non-const iterator
+        return inserted_nodes[index].handle == none_handle;
     }
 
     bool WasInserted(const NodeID node) const
@@ -210,14 +284,15 @@ class QueryHeap
         BOOST_ASSERT(!heap.empty());
         const Key removedIndex = heap.top().second;
         heap.pop();
-        inserted_nodes[removedIndex].handle = HeapHandle{};
+        inserted_nodes[removedIndex].handle = heap.s_handle_from_iterator(heap.end());
         return inserted_nodes[removedIndex].node;
     }
 
     void DeleteAll()
     {
-        std::for_each(inserted_nodes.begin(), inserted_nodes.end(), [](auto &node) {
-            node.handle = HeapHandle();
+        auto const none_handle = heap.s_handle_from_iterator(heap.end());
+        std::for_each(inserted_nodes.begin(), inserted_nodes.end(), [&none_handle](auto &node) {
+            node.handle = none_handle;
         });
         heap.clear();
     }

@@ -8,10 +8,10 @@ Feature: osrm-contract command line options: help
         And stdout should contain "Options:"
         And stdout should contain "--version"
         And stdout should contain "--help"
+        And stdout should contain "--verbosity"
         And stdout should contain "Configuration:"
         And stdout should contain "--threads"
         And stdout should contain "--core"
-        And stdout should contain "--level-cache"
         And stdout should contain "--segment-speed-file"
         And it should exit with an error
 
@@ -22,10 +22,10 @@ Feature: osrm-contract command line options: help
         And stdout should contain "Options:"
         And stdout should contain "--version"
         And stdout should contain "--help"
+        And stdout should contain "--verbosity"
         And stdout should contain "Configuration:"
         And stdout should contain "--threads"
         And stdout should contain "--core"
-        And stdout should contain "--level-cache"
         And stdout should contain "--segment-speed-file"
         And it should exit successfully
 
@@ -36,9 +36,9 @@ Feature: osrm-contract command line options: help
         And stdout should contain "Options:"
         And stdout should contain "--version"
         And stdout should contain "--help"
+        And stdout should contain "--verbosity"
         And stdout should contain "Configuration:"
         And stdout should contain "--threads"
         And stdout should contain "--core"
-        And stdout should contain "--level-cache"
         And stdout should contain "--segment-speed-file"
         And it should exit successfully

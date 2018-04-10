@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2016, Project OSRM contributors
+Copyright (c) 2017, Project OSRM contributors
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without modification,
@@ -72,6 +72,7 @@ static const OSMWayID MIN_OSM_WAYID = OSMWayID{std::numeric_limits<OSMWayID::val
 using NodeID = std::uint32_t;
 using EdgeID = std::uint32_t;
 using NameID = std::uint32_t;
+using AnnotationID = std::uint32_t;
 using EdgeWeight = std::int32_t;
 using EdgeDuration = std::int32_t;
 using SegmentWeight = std::uint32_t;
@@ -104,9 +105,9 @@ static const NameID INVALID_NAMEID = std::numeric_limits<NameID>::max();
 static const NameID EMPTY_NAMEID = 0;
 static const unsigned INVALID_COMPONENTID = 0;
 static const std::size_t SEGMENT_WEIGHT_BITS = 22;
-static const std::size_t SEGMENT_DURAITON_BITS = 22;
+static const std::size_t SEGMENT_DURATION_BITS = 22;
 static const SegmentWeight INVALID_SEGMENT_WEIGHT = (1u << SEGMENT_WEIGHT_BITS) - 1;
-static const SegmentDuration INVALID_SEGMENT_DURATION = (1u << SEGMENT_DURAITON_BITS) - 1;
+static const SegmentDuration INVALID_SEGMENT_DURATION = (1u << SEGMENT_DURATION_BITS) - 1;
 static const SegmentWeight MAX_SEGMENT_WEIGHT = INVALID_SEGMENT_WEIGHT - 1;
 static const SegmentDuration MAX_SEGMENT_DURATION = INVALID_SEGMENT_DURATION - 1;
 static const EdgeWeight INVALID_EDGE_WEIGHT = std::numeric_limits<EdgeWeight>::max();

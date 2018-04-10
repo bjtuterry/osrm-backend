@@ -1,7 +1,8 @@
 #ifndef OSRM_ENGINE_ROUTING_BASE_HPP
 #define OSRM_ENGINE_ROUTING_BASE_HPP
 
-#include "extractor/guidance/turn_instruction.hpp"
+#include "guidance/turn_bearing.hpp"
+#include "guidance/turn_instruction.hpp"
 
 #include "engine/algorithm.hpp"
 #include "engine/datafacade.hpp"
@@ -10,7 +11,6 @@
 #include "engine/search_engine_data.hpp"
 
 #include "util/coordinate_calculation.hpp"
-#include "util/guidance/turn_bearing.hpp"
 #include "util/typedefs.hpp"
 
 #include <boost/assert.hpp>
@@ -136,24 +136,29 @@ void annotatePath(const FacadeT &facade,
 
     // datastructures to hold extracted data from geometry
     std::vector<NodeID> id_vector;
-    std::vector<EdgeWeight> weight_vector;
-    std::vector<EdgeWeight> duration_vector;
+    std::vector<SegmentWeight> weight_vector;
+    std::vector<SegmentDuration> duration_vector;
     std::vector<DatasourceID> datasource_vector;
 
     const auto get_segment_geometry = [&](const auto geometry_index) {
+        const auto copy = [](auto &vector, const auto range) {
+            vector.resize(range.size());
+            std::copy(range.begin(), range.end(), vector.begin());
+        };
+
         if (geometry_index.forward)
         {
-            id_vector = facade.GetUncompressedForwardGeometry(geometry_index.id);
-            weight_vector = facade.GetUncompressedForwardWeights(geometry_index.id);
-            duration_vector = facade.GetUncompressedForwardDurations(geometry_index.id);
-            datasource_vector = facade.GetUncompressedForwardDatasources(geometry_index.id);
+            copy(id_vector, facade.GetUncompressedForwardGeometry(geometry_index.id));
+            copy(weight_vector, facade.GetUncompressedForwardWeights(geometry_index.id));
+            copy(duration_vector, facade.GetUncompressedForwardDurations(geometry_index.id));
+            copy(datasource_vector, facade.GetUncompressedForwardDatasources(geometry_index.id));
         }
         else
         {
-            id_vector = facade.GetUncompressedReverseGeometry(geometry_index.id);
-            weight_vector = facade.GetUncompressedReverseWeights(geometry_index.id);
-            duration_vector = facade.GetUncompressedReverseDurations(geometry_index.id);
-            datasource_vector = facade.GetUncompressedReverseDatasources(geometry_index.id);
+            copy(id_vector, facade.GetUncompressedReverseGeometry(geometry_index.id));
+            copy(weight_vector, facade.GetUncompressedReverseWeights(geometry_index.id));
+            copy(duration_vector, facade.GetUncompressedReverseDurations(geometry_index.id));
+            copy(datasource_vector, facade.GetUncompressedReverseDatasources(geometry_index.id));
         }
     };
 
@@ -164,6 +169,7 @@ void annotatePath(const FacadeT &facade,
         const auto turn_id = edge_data.turn_id; // edge-based graph edge index
         const auto node_id = *node_from;        // edge-based graph node index
         const auto name_index = facade.GetNameIndex(node_id);
+        const bool is_segregated = facade.IsSegregated(node_id);
         const auto turn_instruction = facade.GetTurnInstructionForEdgeID(turn_id);
         const extractor::TravelMode travel_mode = facade.GetTravelMode(node_id);
         const auto classes = facade.GetClassData(node_id);
@@ -173,8 +179,8 @@ void annotatePath(const FacadeT &facade,
 
         BOOST_ASSERT(id_vector.size() > 0);
         BOOST_ASSERT(datasource_vector.size() > 0);
-        BOOST_ASSERT(weight_vector.size() == id_vector.size() - 1);
-        BOOST_ASSERT(duration_vector.size() == id_vector.size() - 1);
+        BOOST_ASSERT(weight_vector.size() + 1 == id_vector.size());
+        BOOST_ASSERT(duration_vector.size() + 1 == id_vector.size());
         const bool is_first_segment = unpacked_path.empty();
 
         const std::size_t start_index =
@@ -185,24 +191,30 @@ void annotatePath(const FacadeT &facade,
                               : 0);
         const std::size_t end_index = weight_vector.size();
 
+        bool is_left_hand_driving = facade.IsLeftHandDriving(node_id);
+
         BOOST_ASSERT(start_index >= 0);
         BOOST_ASSERT(start_index < end_index);
         for (std::size_t segment_idx = start_index; segment_idx < end_index; ++segment_idx)
         {
-            unpacked_path.push_back(PathData{id_vector[segment_idx + 1],
-                                             name_index,
-                                             weight_vector[segment_idx],
-                                             0,
-                                             duration_vector[segment_idx],
-                                             0,
-                                             extractor::guidance::TurnInstruction::NO_TURN(),
-                                             {{0, INVALID_LANEID}, INVALID_LANE_DESCRIPTIONID},
-                                             travel_mode,
-                                             classes,
-                                             EMPTY_ENTRY_CLASS,
-                                             datasource_vector[segment_idx],
-                                             util::guidance::TurnBearing(0),
-                                             util::guidance::TurnBearing(0)});
+            unpacked_path.push_back(
+                PathData{*node_from,
+                         id_vector[segment_idx + 1],
+                         name_index,
+                         is_segregated,
+                         static_cast<EdgeWeight>(weight_vector[segment_idx]),
+                         0,
+                         static_cast<EdgeDuration>(duration_vector[segment_idx]),
+                         0,
+                         guidance::TurnInstruction::NO_TURN(),
+                         {{0, INVALID_LANEID}, INVALID_LANE_DESCRIPTIONID},
+                         travel_mode,
+                         classes,
+                         EMPTY_ENTRY_CLASS,
+                         datasource_vector[segment_idx],
+                         osrm::guidance::TurnBearing(0),
+                         osrm::guidance::TurnBearing(0),
+                         is_left_hand_driving});
         }
         BOOST_ASSERT(unpacked_path.size() > 0);
         if (facade.HasLaneData(turn_id))
@@ -254,26 +266,30 @@ void annotatePath(const FacadeT &facade,
     // t: fwd_segment 3
     // -> (U, v), (v, w), (w, x)
     // note that (x, t) is _not_ included but needs to be added later.
+    bool is_target_left_hand_driving = facade.IsLeftHandDriving(target_node_id);
     for (std::size_t segment_idx = start_index; segment_idx != end_index;
          (start_index < end_index ? ++segment_idx : --segment_idx))
     {
-        BOOST_ASSERT(segment_idx < id_vector.size() - 1);
+        BOOST_ASSERT(segment_idx < static_cast<std::size_t>(id_vector.size() - 1));
         BOOST_ASSERT(facade.GetTravelMode(target_node_id) > 0);
         unpacked_path.push_back(
-            PathData{id_vector[start_index < end_index ? segment_idx + 1 : segment_idx - 1],
+            PathData{target_node_id,
+                     id_vector[start_index < end_index ? segment_idx + 1 : segment_idx - 1],
                      facade.GetNameIndex(target_node_id),
-                     weight_vector[segment_idx],
+                     facade.IsSegregated(target_node_id),
+                     static_cast<EdgeWeight>(weight_vector[segment_idx]),
                      0,
-                     duration_vector[segment_idx],
+                     static_cast<EdgeDuration>(duration_vector[segment_idx]),
                      0,
-                     extractor::guidance::TurnInstruction::NO_TURN(),
+                     guidance::TurnInstruction::NO_TURN(),
                      {{0, INVALID_LANEID}, INVALID_LANE_DESCRIPTIONID},
                      facade.GetTravelMode(target_node_id),
                      facade.GetClassData(target_node_id),
                      EMPTY_ENTRY_CLASS,
                      datasource_vector[segment_idx],
-                     util::guidance::TurnBearing(0),
-                     util::guidance::TurnBearing(0)});
+                     guidance::TurnBearing(0),
+                     guidance::TurnBearing(0),
+                     is_target_left_hand_driving});
     }
 
     if (unpacked_path.size() > 0)

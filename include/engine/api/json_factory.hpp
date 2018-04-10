@@ -1,8 +1,8 @@
 #ifndef ENGINE_RESPONSE_OBJECTS_HPP_
 #define ENGINE_RESPONSE_OBJECTS_HPP_
 
-#include "extractor/guidance/turn_instruction.hpp"
 #include "extractor/travel_mode.hpp"
+#include "guidance/turn_instruction.hpp"
 #include "engine/guidance/leg_geometry.hpp"
 #include "engine/guidance/route.hpp"
 #include "engine/guidance/route_leg.hpp"
@@ -33,12 +33,7 @@ namespace json
 namespace detail
 {
 
-std::string instructionTypeToString(extractor::guidance::TurnType::Enum type);
-std::string instructionModifierToString(extractor::guidance::DirectionModifier::Enum modifier);
-
 util::json::Array coordinateToLonLat(const util::Coordinate coordinate);
-
-std::string modeToString(const extractor::TravelMode mode);
 
 /**
  * Ensures that a bearing value is a whole number, and clamped to the range 0-359

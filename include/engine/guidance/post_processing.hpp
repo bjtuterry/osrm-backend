@@ -1,6 +1,7 @@
 #ifndef ENGINE_GUIDANCE_POST_PROCESSING_HPP
 #define ENGINE_GUIDANCE_POST_PROCESSING_HPP
 
+#include "engine/datafacade/datafacade_base.hpp"
 #include "engine/guidance/leg_geometry.hpp"
 #include "engine/guidance/route_step.hpp"
 #include "engine/phantom_node.hpp"
@@ -17,7 +18,7 @@ namespace guidance
 
 // passed as none-reference to modify in-place and move out again
 OSRM_ATTR_WARN_UNUSED
-std::vector<RouteStep> postProcess(std::vector<RouteStep> steps);
+std::vector<RouteStep> handleRoundabouts(std::vector<RouteStep> steps);
 
 // trim initial/final segment of very short length.
 // This function uses in/out parameter passing to modify both steps and geometry in place.
@@ -44,6 +45,18 @@ std::vector<RouteStep> buildIntersections(std::vector<RouteStep> steps);
 // Move in LegGeometry for modification in place.
 OSRM_ATTR_WARN_UNUSED
 LegGeometry resyncGeometry(LegGeometry leg_geometry, const std::vector<RouteStep> &steps);
+
+/**
+ * Apply maneuver override relations to the selected route.
+ * Should be called before any other post-processing is performed
+ * to ensure that all sequences of edge-based-nodes are still in the
+ * steps list.
+ *
+ * @param steps the steps of the route
+ */
+void applyOverrides(const datafacade::BaseDataFacade &facade,
+                    std::vector<RouteStep> &steps,
+                    const LegGeometry &geometry);
 
 } // namespace guidance
 } // namespace engine

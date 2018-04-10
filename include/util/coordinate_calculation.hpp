@@ -21,8 +21,8 @@ namespace coordinate_calculation
 
 namespace detail
 {
-const constexpr long double DEGREE_TO_RAD = 0.017453292519943295769236907684886;
-const constexpr long double RAD_TO_DEGREE = 1. / DEGREE_TO_RAD;
+const constexpr double DEGREE_TO_RAD = 0.017453292519943295769236907684886;
+const constexpr double RAD_TO_DEGREE = 1. / DEGREE_TO_RAD;
 // earth radius varies between 6,356.750-6,378.135 km (3,949.901-3,963.189mi)
 // The IUGG value for the equatorial radius is 6378.137 km (3963.19 miles)
 const constexpr long double EARTH_RADIUS = 6372797.560856;
@@ -377,6 +377,8 @@ bool areParallel(const iterator_type lhs_begin,
     // hand side to ensure we only considering slight slopes
     return std::abs(slope_rhs) < 0.20; // twenty percent incline at the most
 }
+
+double computeArea(const std::vector<Coordinate> &polygon);
 
 } // ns coordinate_calculation
 } // ns util

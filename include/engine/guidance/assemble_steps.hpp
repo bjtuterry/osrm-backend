@@ -1,9 +1,9 @@
 #ifndef ENGINE_GUIDANCE_ASSEMBLE_STEPS_HPP_
 #define ENGINE_GUIDANCE_ASSEMBLE_STEPS_HPP_
 
-#include "extractor/guidance/turn_instruction.hpp"
-#include "extractor/guidance/turn_lane_types.hpp"
 #include "extractor/travel_mode.hpp"
+#include "extractor/turn_lane_types.hpp"
+#include "guidance/turn_instruction.hpp"
 #include "engine/datafacade/datafacade_base.hpp"
 #include "engine/guidance/leg_geometry.hpp"
 #include "engine/guidance/route_step.hpp"
@@ -29,8 +29,12 @@ namespace guidance
 {
 namespace detail
 {
-std::pair<short, short> getDepartBearings(const LegGeometry &leg_geometry);
-std::pair<short, short> getArriveBearings(const LegGeometry &leg_geometry);
+std::pair<short, short> getDepartBearings(const LegGeometry &leg_geometry,
+                                          const PhantomNode &source_node,
+                                          const bool traversed_in_reverse);
+std::pair<short, short> getArriveBearings(const LegGeometry &leg_geometry,
+                                          const PhantomNode &target_node,
+                                          const bool traversed_in_reverse);
 } // ns detail
 
 inline std::vector<RouteStep> assembleSteps(const datafacade::BaseDataFacade &facade,
@@ -52,6 +56,7 @@ inline std::vector<RouteStep> assembleSteps(const datafacade::BaseDataFacade &fa
     const auto source_node_id = source_traversed_in_reverse ? source_node.reverse_segment_id.id
                                                             : source_node.forward_segment_id.id;
     const auto source_name_id = facade.GetNameIndex(source_node_id);
+    bool is_segregated = facade.IsSegregated(source_node_id);
     const auto source_mode = facade.GetTravelMode(source_node_id);
     auto source_classes = facade.GetClasses(facade.GetClassData(source_node_id));
 
@@ -72,12 +77,13 @@ inline std::vector<RouteStep> assembleSteps(const datafacade::BaseDataFacade &fa
     std::size_t segment_index = 0;
     BOOST_ASSERT(leg_geometry.locations.size() >= 2);
 
-    auto bearings = detail::getDepartBearings(leg_geometry);
+    auto bearings =
+        detail::getDepartBearings(leg_geometry, source_node, source_traversed_in_reverse);
 
     StepManeuver maneuver{source_node.location,
                           bearings.first,
                           bearings.second,
-                          extractor::guidance::TurnInstruction::NO_TURN(),
+                          osrm::guidance::TurnInstruction::NO_TURN(),
                           WaypointType::Depart,
                           0};
 
@@ -109,7 +115,7 @@ inline std::vector<RouteStep> assembleSteps(const datafacade::BaseDataFacade &fa
             segment_weight += path_point.weight_until_turn;
 
             // all changes to this check have to be matched with assemble_geometry
-            if (path_point.turn_instruction.type != extractor::guidance::TurnType::NoTurn)
+            if (path_point.turn_instruction.type != osrm::guidance::TurnType::NoTurn)
             {
                 BOOST_ASSERT(segment_weight >= 0);
                 const auto name = facade.GetNameForID(step_name_id);
@@ -121,7 +127,9 @@ inline std::vector<RouteStep> assembleSteps(const datafacade::BaseDataFacade &fa
                 // intersections contain the classes of exiting road
                 intersection.classes = facade.GetClasses(path_point.classes);
 
-                steps.push_back(RouteStep{step_name_id,
+                steps.push_back(RouteStep{path_point.from_edge_based_node,
+                                          step_name_id,
+                                          is_segregated,
                                           name.to_string(),
                                           ref.to_string(),
                                           pronunciation.to_string(),
@@ -136,15 +144,18 @@ inline std::vector<RouteStep> assembleSteps(const datafacade::BaseDataFacade &fa
                                           maneuver,
                                           leg_geometry.FrontIndex(segment_index),
                                           leg_geometry.BackIndex(segment_index) + 1,
-                                          {intersection}});
+                                          {intersection},
+                                          path_point.is_left_hand_driving});
 
                 if (leg_data_index + 1 < leg_data.size())
                 {
                     step_name_id = leg_data[leg_data_index + 1].name_id;
+                    is_segregated = leg_data[leg_data_index + 1].is_segregated;
                 }
                 else
                 {
                     step_name_id = facade.GetNameIndex(target_node_id);
+                    is_segregated = facade.IsSegregated(target_node_id);
                 }
 
                 // extract bearings
@@ -161,7 +172,7 @@ inline std::vector<RouteStep> assembleSteps(const datafacade::BaseDataFacade &fa
                 intersection.lane_description =
                     path_point.lane_data.second != INVALID_LANE_DESCRIPTIONID
                         ? facade.GetTurnDescription(path_point.lane_data.second)
-                        : extractor::guidance::TurnLaneDescription();
+                        : extractor::TurnLaneDescription();
 
                 // Lanes in turn are bound by total number of lanes at the location
                 BOOST_ASSERT(intersection.lanes.lanes_in_turn <=
@@ -199,7 +210,9 @@ inline std::vector<RouteStep> assembleSteps(const datafacade::BaseDataFacade &fa
         // intersections contain the classes of exiting road
         intersection.classes = facade.GetClasses(facade.GetClassData(target_node_id));
         BOOST_ASSERT(duration >= 0);
-        steps.push_back(RouteStep{step_name_id,
+        steps.push_back(RouteStep{leg_data[leg_data.size() - 1].from_edge_based_node,
+                                  step_name_id,
+                                  is_segregated,
                                   facade.GetNameForID(step_name_id).to_string(),
                                   facade.GetRefForID(step_name_id).to_string(),
                                   facade.GetPronunciationForID(step_name_id).to_string(),
@@ -214,7 +227,8 @@ inline std::vector<RouteStep> assembleSteps(const datafacade::BaseDataFacade &fa
                                   maneuver,
                                   leg_geometry.FrontIndex(segment_index),
                                   leg_geometry.BackIndex(segment_index) + 1,
-                                  {intersection}});
+                                  {intersection},
+                                  facade.IsLeftHandDriving(target_node_id)});
     }
     // In this case the source + target are on the same edge segment
     else
@@ -241,7 +255,9 @@ inline std::vector<RouteStep> assembleSteps(const datafacade::BaseDataFacade &fa
         BOOST_ASSERT(target_duration >= source_duration || weight == 0);
         const EdgeWeight duration = std::max(0, target_duration - source_duration);
 
-        steps.push_back(RouteStep{source_name_id,
+        steps.push_back(RouteStep{source_node_id,
+                                  source_name_id,
+                                  is_segregated,
                                   facade.GetNameForID(source_name_id).to_string(),
                                   facade.GetRefForID(source_name_id).to_string(),
                                   facade.GetPronunciationForID(source_name_id).to_string(),
@@ -256,11 +272,12 @@ inline std::vector<RouteStep> assembleSteps(const datafacade::BaseDataFacade &fa
                                   std::move(maneuver),
                                   leg_geometry.FrontIndex(segment_index),
                                   leg_geometry.BackIndex(segment_index) + 1,
-                                  {intersection}});
+                                  {intersection},
+                                  facade.IsLeftHandDriving(source_node_id)});
     }
 
     BOOST_ASSERT(segment_index == number_of_segments - 1);
-    bearings = detail::getArriveBearings(leg_geometry);
+    bearings = detail::getArriveBearings(leg_geometry, target_node, target_traversed_in_reverse);
 
     intersection = {
         target_node.location,
@@ -276,12 +293,14 @@ inline std::vector<RouteStep> assembleSteps(const datafacade::BaseDataFacade &fa
     maneuver = {intersection.location,
                 bearings.first,
                 bearings.second,
-                extractor::guidance::TurnInstruction::NO_TURN(),
+                osrm::guidance::TurnInstruction::NO_TURN(),
                 WaypointType::Arrive,
                 0};
 
     BOOST_ASSERT(!leg_geometry.locations.empty());
-    steps.push_back(RouteStep{target_name_id,
+    steps.push_back(RouteStep{target_node_id,
+                              target_name_id,
+                              facade.IsSegregated(target_node_id),
                               facade.GetNameForID(target_name_id).to_string(),
                               facade.GetRefForID(target_name_id).to_string(),
                               facade.GetPronunciationForID(target_name_id).to_string(),
@@ -296,7 +315,8 @@ inline std::vector<RouteStep> assembleSteps(const datafacade::BaseDataFacade &fa
                               std::move(maneuver),
                               leg_geometry.locations.size() - 1,
                               leg_geometry.locations.size(),
-                              {intersection}});
+                              {intersection},
+                              facade.IsLeftHandDriving(target_node_id)});
 
     BOOST_ASSERT(steps.front().intersections.size() == 1);
     BOOST_ASSERT(steps.front().intersections.front().bearings.size() == 1);
